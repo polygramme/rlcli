@@ -1,0 +1,70 @@
+{
+  "theme": "aspen",
+  "name": "rlcli- interface for continual learning",
+  "colors": {
+    "primary": "#2E7D5B",
+    "light": "#5FB98A",
+    "dark": "#1F5A42"
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/polygramme/rlcli"
+    }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "index",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/backends-and-losses",
+              "concepts/dataset-format"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/supervised-fine-tuning",
+              "guides/reinforcement-learning",
+              "guides/harbor-agent-rl",
+              "guides/importing-traces",
+              "guides/sampling-and-checkpoints"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CLI Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "cli/overview"
+            ]
+          },
+          {
+            "group": "Commands",
+            "pages": [
+              "cli/serve",
+              "cli/train",
+              "cli/import",
+              "cli/sample",
+              "cli/passthrough"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
