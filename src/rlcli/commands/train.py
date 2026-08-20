@@ -37,6 +37,21 @@ def _default_log_path(kind: str) -> str:
     return str(Path.home() / ".rlcli" / "runs" / f"{kind}-{time.strftime('%Y%m%d-%H%M%S')}")
 
 
+def _warn_known_upstream_issues(loss: str) -> None:
+    # Native gspo at the pinned skyrl can return logprobs in packed (not input)
+    # order for variable-length microbatches, failing with an IndexError in the
+    # KL/metrics path before the first update. Fix pending upstream:
+    # https://github.com/NovaSky-AI/SkyRL/pull/2043 — remove this when it merges
+    # and the pin is bumped.
+    if loss == "gspo":
+        click.echo(
+            "note: native gspo has a known upstream ordering bug with variable-length "
+            "batches at the pinned SkyRL (NovaSky-AI/SkyRL#2043, fix in review). "
+            "Verify the first update completes; importance_sampling/ppo are unaffected.",
+            err=True,
+        )
+
+
 def _renderer_for(model_name: str, renderer_name: str | None) -> str:
     if renderer_name:
         return renderer_name
@@ -158,6 +173,7 @@ def rl(model_name, base_url, loss, loss_config, backend_hint, dataset, renderer_
     """RL on a built-in environment, with the full SkyRL loss set."""
     backend = backend_hint or backend_for_url(base_url)
     ensure_loss_supported(loss, backend)
+    _warn_known_upstream_issues(loss)
     _prepare_env(base_url)
 
     from tinker_cookbook.recipes.math_rl.math_env import Gsm8kDatasetBuilder
@@ -233,6 +249,7 @@ def harbor(model_name, base_url, loss, loss_config, backend_hint, dataset, sandb
     """RL on Harbor tasks in local Docker sandboxes, reward from tests/test.sh."""
     backend = backend_hint or backend_for_url(base_url)
     ensure_loss_supported(loss, backend)
+    _warn_known_upstream_issues(loss)
     _prepare_env(base_url)
 
     from tinker_cookbook.recipes.harbor_rl.harbor_env import (
