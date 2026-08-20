@@ -1,9 +1,15 @@
 """SkyRL Tinker server lifecycle.
 
-The server lives in its own uv-managed venv (~/.rlcli/server-venv) because
-skyrl caps tinker<=0.24.1 while rlcli's client env uses tinker 0.25.0 (audit
-E9/E19). The two only meet over HTTP. On macOS the JAX extra supplies a CPU
-path with no vLLM/Ray (audit E20); Linux GPU boxes use fsdp or megatron.
+The server runs out of a pinned skyrl source checkout via `uv run` — not a
+plain venv — because skyrl's API process relaunches its background engine
+with `uv run <parent flags> --extra tinker --extra <backend> -m
+skyrl.tinker.engine`, and its startup parser only accepts servers launched as
+`uv run ... -m skyrl.tinker.api` from the project (skyrl/tinker/api.py:184).
+uv manages the project env from skyrl's own lockfile, which also isolates the
+server's tinker<=0.24.1 cap from rlcli's tinker 0.25.0 client env (audit E9).
+
+On macOS the JAX extra gives a CPU path with no vLLM/Ray (audit E20); Linux
+GPU boxes use the fsdp or megatron extras.
 """
 
 from __future__ import annotations
@@ -18,12 +24,14 @@ from pathlib import Path
 
 import httpx
 
-from . import SKYRL_GIT_SOURCE
+from . import SKYRL_PIN
+
+SKYRL_REPO_URL = "https://github.com/NovaSky-AI/SkyRL"
 
 RLCLI_HOME = Path(os.environ.get("RLCLI_HOME", Path.home() / ".rlcli"))
 STATE_FILE = RLCLI_HOME / "server.json"
 LOG_FILE = RLCLI_HOME / "server.log"
-VENV_DIR = RLCLI_HOME / "server-venv"
+CHECKOUT_DIR = RLCLI_HOME / "skyrl-src"
 
 BACKEND_EXTRAS = {"jax": "jax", "fsdp": "fsdp", "megatron": "megatron"}
 
@@ -32,37 +40,64 @@ class ServerError(RuntimeError):
     pass
 
 
-def _venv_python() -> Path:
-    if platform.system() == "Windows":
-        return VENV_DIR / "Scripts" / "python.exe"
-    return VENV_DIR / "bin" / "python"
+def _env() -> dict:
+    # Don't leak rlcli's own venv into uv's project resolution.
+    env = {**os.environ}
+    env.pop("VIRTUAL_ENV", None)
+    return env
 
 
-def skyrl_source() -> str:
-    return os.environ.get("RLCLI_SKYRL_SOURCE", SKYRL_GIT_SOURCE)
+def skyrl_checkout(log=print) -> Path:
+    """Return a skyrl source tree: RLCLI_SKYRL_SOURCE if set, else a pinned clone."""
+    override = os.environ.get("RLCLI_SKYRL_SOURCE")
+    if override:
+        path = Path(override.removeprefix("file://"))
+        if not (path / "pyproject.toml").exists():
+            raise ServerError(f"RLCLI_SKYRL_SOURCE={override} is not a skyrl checkout")
+        return path
+    if not (CHECKOUT_DIR / "pyproject.toml").exists():
+        RLCLI_HOME.mkdir(parents=True, exist_ok=True)
+        log(f"Cloning skyrl @ {SKYRL_PIN[:12]} into {CHECKOUT_DIR} …")
+        subprocess.run(
+            ["git", "clone", "--filter=blob:none", SKYRL_REPO_URL, str(CHECKOUT_DIR)],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(CHECKOUT_DIR), "checkout", "-q", SKYRL_PIN], check=True)
+    return CHECKOUT_DIR
 
 
 def ensure_installed(backend: str, log=print) -> Path:
-    """Create the server venv and install skyrl with the right extras."""
+    """Sync the skyrl project env for the backend's extras; returns checkout dir."""
     if backend not in BACKEND_EXTRAS:
         raise ServerError(f"Unknown backend {backend!r}. Known: {', '.join(BACKEND_EXTRAS)}")
-    RLCLI_HOME.mkdir(parents=True, exist_ok=True)
-    python = _venv_python()
-    spec = f"skyrl[tinker,{BACKEND_EXTRAS[backend]}] @ {skyrl_source()}"
-    marker = RLCLI_HOME / f"installed-{backend}.json"
-    if python.exists() and marker.exists() and json.loads(marker.read_text()).get("spec") == spec:
-        return python
-    if not python.exists():
-        log(f"Creating server venv at {VENV_DIR} …")
-        subprocess.run(["uv", "venv", "-p", "3.12", str(VENV_DIR)], check=True)
-    log(f"Installing {spec} (first run can take a few minutes) …")
+    checkout = skyrl_checkout(log=log)
+    log(f"Syncing skyrl env in {checkout} (first run can take a few minutes) …")
     subprocess.run(
-        ["uv", "pip", "install", spec],
+        ["uv", "sync", "--extra", "tinker", "--extra", BACKEND_EXTRAS[backend]],
         check=True,
-        env={**os.environ, "VIRTUAL_ENV": str(VENV_DIR)},
+        cwd=checkout,
+        env=_env(),
     )
-    marker.write_text(json.dumps({"spec": spec, "time": time.time()}))
-    return python
+    if backend == "jax" and platform.system() == "Darwin":
+        # skyrl's [tool.uv] override-dependencies marks ml-dtypes and
+        # transformers as sys_platform=='linux' only, but the JAX engine
+        # imports both on every platform — broken on macOS as locked. uv
+        # honors the override even for `uv pip install` run inside the
+        # project, so install with an explicit --python from outside the
+        # checkout, and launch with --no-sync so `uv run` doesn't strip them
+        # back out.
+        RLCLI_HOME.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                "uv", "pip", "install", "-q",
+                "--python", str(checkout / ".venv" / "bin" / "python"),
+                "ml_dtypes", "transformers>=5.6.1,<=5.8.0",
+            ],
+            check=True,
+            cwd=RLCLI_HOME,
+            env=_env(),
+        )
+    return checkout
 
 
 def read_state() -> dict | None:
@@ -111,10 +146,18 @@ def start(
 ) -> dict:
     if status() is not None:
         raise ServerError("A managed server is already running — `rlcli serve stop` first.")
-    python = ensure_installed(backend, log=log)
+    checkout = ensure_installed(backend, log=log)
 
+    # Must match skyrl's accepted startup form: uv run <flags> -m skyrl.tinker.api.
+    # --no-sync is inherited by the engine relaunch and keeps our ml_dtypes fix.
     cmd = [
-        str(python),
+        "uv",
+        "run",
+        "--no-sync",
+        "--extra",
+        "tinker",
+        "--extra",
+        BACKEND_EXTRAS[backend],
         "-m",
         "skyrl.tinker.api",
         "--base-model",
@@ -133,7 +176,9 @@ def start(
     log(f"Starting: {' '.join(cmd)}")
     log(f"Logs: {LOG_FILE}")
     with open(LOG_FILE, "ab") as logf:
-        proc = subprocess.Popen(cmd, stdout=logf, stderr=logf, start_new_session=True)
+        proc = subprocess.Popen(
+            cmd, stdout=logf, stderr=logf, start_new_session=True, cwd=checkout, env=_env()
+        )
 
     state = {
         "pid": proc.pid,
@@ -141,6 +186,7 @@ def start(
         "base_model": base_model,
         "backend": backend,
         "base_url": f"http://localhost:{port}",
+        "checkout": str(checkout),
         "started": time.time(),
     }
     STATE_FILE.write_text(json.dumps(state, indent=2))
@@ -148,6 +194,7 @@ def start(
     deadline = time.time() + wait_seconds
     while time.time() < deadline:
         if proc.poll() is not None:
+            STATE_FILE.unlink(missing_ok=True)
             tail = tail_log(40)
             raise ServerError(f"Server exited early (code {proc.returncode}). Log tail:\n{tail}")
         if health(port):
