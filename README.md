@@ -13,6 +13,9 @@ rlcli train sl --model Qwen/Qwen3-4B-Instruct-2507 --dataset conversations.jsonl
 
 # RL with the fused GSPO loss — one forward_backward call, not Tinker's 2-forward custom-loss path
 rlcli train rl --model Qwen/Qwen3-4B-Instruct-2507 --loss gspo
+
+# import your agent's chat dumps and fine-tune on them, all on your hardware
+rlcli import prod-traces.jsonl -f openai | rlcli train sl --dataset - --model Qwen/Qwen3-4B-Instruct-2507
 ```
 
 Not to be confused with `rl-cli` (Runloop's CLI) on PyPI.
@@ -32,6 +35,12 @@ One JSON object per line:
 ```json
 {"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]}
 ```
+
+`rlcli import` produces this from common chat dumps: `-f openai` (chat-completions
+dumps; tool-call turns dropped), `-f anthropic` (Messages API dumps; content blocks
+flattened, top-level `system` kept), `-f messages` (already-shaped, roles normalized
+— `human`→`user`, `ai`→`assistant`). Imported traces feed SFT/distillation; RL needs
+an environment and reward (see roadmap).
 
 ## Development
 

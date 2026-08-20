@@ -56,9 +56,28 @@ def cli():
     """One-shot training runs against a Tinker-API server."""
 
 
+def _materialize_dataset(dataset_path: str) -> str:
+    """Support --dataset - : spool stdin (e.g. piped `rlcli import`) to a file."""
+    if dataset_path != "-":
+        return dataset_path
+    import sys
+    import tempfile
+
+    data = sys.stdin.read()
+    if not data.strip():
+        raise click.UsageError("--dataset - was given but stdin is empty.")
+    f = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".jsonl", prefix="rlcli-dataset-", delete=False, encoding="utf-8"
+    )
+    f.write(data)
+    f.close()
+    return f.name
+
+
 @cli.command("sl")
 @click.option("--dataset", "dataset_path", required=True,
-              help='JSONL file: one {"messages": [{"role", "content"}, ...]} object per line.')
+              help='JSONL file: one {"messages": [{"role", "content"}, ...]} object per '
+                   "line. Use '-' to read from stdin (pipe from `rlcli import`).")
 @click.option("--model", "model_name", required=True, help="HuggingFace model name.")
 @click.option("--base-url", default=DEFAULT_BASE_URL, show_default=True)
 @click.option("--renderer", "renderer_name", default=None,
@@ -75,6 +94,7 @@ def cli():
 def sl(dataset_path, model_name, base_url, renderer_name, batch_size, learning_rate,
        max_length, num_epochs, lora_rank, save_every, test_size, log_path, dry_run):
     """Supervised fine-tuning on a messages-JSONL dataset."""
+    dataset_path = _materialize_dataset(dataset_path)
     _prepare_env(base_url)
     from tinker_cookbook.supervised import train as sl_train
     from tinker_cookbook.supervised.data import FromConversationFileBuilder
