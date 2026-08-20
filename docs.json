@@ -1,5 +1,5 @@
 {
-  "theme": "aspen",
+  "theme": "mint",
   "name": "rlcli",
   "colors": {
     "primary": "#2E7D5B",
@@ -67,5 +67,9 @@
         ]
       }
     ]
+  },
+  "favicon": {
+    "light": "/images/Blackback1.001.png",
+    "dark": "/images/Blackback1.001.png"
   }
 }
