@@ -29,7 +29,8 @@
             "pages": [
               "concepts/architecture",
               "concepts/backends-and-losses",
-              "concepts/dataset-format"
+              "concepts/dataset-format",
+              "concepts/benchmarks"
             ]
           },
           {
