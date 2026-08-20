@@ -193,3 +193,115 @@ def rl(model_name, base_url, loss, loss_config, backend_hint, dataset, renderer_
         return
     click.echo(f"RL: {model_name} on {dataset} via {base_url}, loss_fn={loss}")
     _run(rl_train.main(config))
+
+
+@cli.command("harbor")
+@click.option("--model", "model_name", required=True, help="HuggingFace model name.")
+@click.option("--base-url", default=DEFAULT_BASE_URL, show_default=True)
+@click.option("--loss", default="importance_sampling", show_default=True,
+              type=click.Choice(ALL_LOSSES),
+              help="Fused losses (gspo/dppo/ppo_critic) need a fsdp or megatron server.")
+@click.option("--loss-config", default=None, help='JSON, e.g. \'{"clip_low_threshold": 0.8}\'.')
+@click.option("--backend", "backend_hint", default=None,
+              type=click.Choice(["jax", "fsdp", "megatron"]),
+              help="Backend of the target server, for the loss guard.")
+@click.option("--dataset", default="terminal-bench@2.0", show_default=True,
+              help="Harbor dataset under ~/.cache/harbor/tasks/ "
+                   "(auto-downloaded via `uvx harbor datasets download` if missing).")
+@click.option("--sandbox", type=click.Choice(["docker", "modal"]), default="docker",
+              show_default=True, help="docker = local daemon, no cloud account needed.")
+@click.option("--task-filter", default=None, help="Only tasks whose name contains this substring.")
+@click.option("--limit", "task_limit", type=int, default=None, help="Use at most N tasks.")
+@click.option("--renderer", "renderer_name", default=None)
+@click.option("--group-size", type=int, default=4, show_default=True)
+@click.option("--groups-per-batch", type=int, default=4, show_default=True)
+@click.option("--lr", "learning_rate", type=float, default=1e-5, show_default=True)
+@click.option("--max-tokens", type=int, default=4096, show_default=True)
+@click.option("--max-turns", type=int, default=10, show_default=True)
+@click.option("--lora-rank", type=int, default=32, show_default=True)
+@click.option("--save-every", type=int, default=5, show_default=True)
+@click.option("--eval-every", type=int, default=0, show_default=True)
+@click.option("--max-steps", type=int, default=None)
+@click.option("--sandbox-timeout", type=int, default=3600, show_default=True)
+@click.option("--command-timeout", type=int, default=120, show_default=True)
+@click.option("--log-path", default=None)
+@click.option("--dry-run", is_flag=True, help="Load tasks and build the config, don't train.")
+def harbor(model_name, base_url, loss, loss_config, backend_hint, dataset, sandbox,
+           task_filter, task_limit, renderer_name, group_size, groups_per_batch,
+           learning_rate, max_tokens, max_turns, lora_rank, save_every, eval_every,
+           max_steps, sandbox_timeout, command_timeout, log_path, dry_run):
+    """RL on Harbor tasks in local Docker sandboxes, reward from tests/test.sh."""
+    backend = backend_hint or backend_for_url(base_url)
+    ensure_loss_supported(loss, backend)
+    _prepare_env(base_url)
+
+    from tinker_cookbook.recipes.harbor_rl.harbor_env import (
+        HARBOR_CACHE_DIR,
+        HarborDatasetBuilder,
+        load_harbor_tasks,
+    )
+    from tinker_cookbook.rl import train as rl_train
+
+    dataset_dir = HARBOR_CACHE_DIR / dataset
+    if not dataset_dir.is_dir():
+        click.echo(f"Downloading harbor dataset {dataset} to {dataset_dir} …")
+        import subprocess
+        subprocess.run(
+            ["uvx", "harbor", "datasets", "download", dataset, "-o", str(dataset_dir)],
+            check=True,
+        )
+    tasks = load_harbor_tasks(dataset)
+    if task_filter:
+        tasks = [t for t in tasks if task_filter in t.task_name]
+    if task_limit:
+        tasks = tasks[:task_limit]
+    if not tasks:
+        raise click.UsageError(f"No tasks matched in {dataset_dir} (filter={task_filter!r}).")
+
+    sandbox_factory = None
+    if sandbox == "docker":
+        from rlcli.sandbox_docker import local_docker_sandbox_factory
+
+        sandbox_factory = local_docker_sandbox_factory
+
+    renderer_name = _renderer_for(model_name, renderer_name)
+    dataset_builder = HarborDatasetBuilder(
+        tasks=tasks,
+        batch_size=groups_per_batch,
+        group_size=group_size,
+        model_name=model_name,
+        renderer_name=renderer_name,
+        max_turns=max_turns,
+        sandbox_timeout=sandbox_timeout,
+        command_timeout=command_timeout,
+        sandbox_factory=sandbox_factory,
+    )
+    kwargs = dict(
+        learning_rate=learning_rate,
+        dataset_builder=dataset_builder,
+        model_name=model_name,
+        recipe_name="rlcli_train_harbor",
+        max_tokens=max_tokens,
+        log_path=log_path or _default_log_path("harbor"),
+        renderer_name=renderer_name,
+        lora_rank=lora_rank,
+        save_every=save_every,
+        eval_every=eval_every,
+        base_url=base_url,
+        loss_fn=as_loss_fn(loss),
+        loss_fn_config=json.loads(loss_config) if loss_config else None,
+    )
+    if max_steps is not None:
+        kwargs["max_steps"] = max_steps
+    config = rl_train.Config(**kwargs)
+    if dry_run:
+        click.echo(
+            f"[dry-run] harbor config OK: {len(tasks)} tasks, sandbox={sandbox}, "
+            f"loss_fn={loss} backend={backend or 'unknown'}"
+        )
+        return
+    click.echo(
+        f"Harbor RL: {model_name}, {len(tasks)} tasks from {dataset}, "
+        f"sandbox={sandbox}, loss_fn={loss}, via {base_url}"
+    )
+    _run(rl_train.main(config))

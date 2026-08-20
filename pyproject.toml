@@ -21,6 +21,9 @@ train = [
     "sympy",
     "pylatexenc",
     "math-verify",
+    # harbor_rl imports ModalSandbox at module level, so the modal SDK must be
+    # installed even when using rlcli's local Docker sandbox (no account needed).
+    "modal",
 ]
 dev = ["pytest>=8"]
 
