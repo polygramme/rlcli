@@ -1,0 +1,63 @@
+---
+title: "rlcli checkpoint, run, session: Tinker CLI passthrough"
+sidebarTitle: "Tinker Passthrough"
+description: "Use rlcli checkpoint, run, and session as thin passthroughs to the official tinker CLI, pre-wired for your local server."
+---
+
+rlcli wraps the official `tinker` CLI for `checkpoint`, `run`, and `session` so you can manage checkpoints and runs against your local SkyRL server without switching tools. The passthrough commands forward all extra arguments unchanged and pre-configure the Tinker base URL and API key.
+
+## How it works
+
+Each passthrough command runs:
+
+```bash
+python -m tinker.cli <name> ...
+```
+
+- `rlcli checkpoint ...` → `python -m tinker.cli checkpoint ...`
+- `rlcli run ...` → `python -m tinker.cli run ...`
+- `rlcli session ...` → `python -m tinker.cli session ...`
+
+rlcli sets `TINKER_BASE_URL` to `http://localhost:8000` if unset, and `TINKER_API_KEY` to `tml-dummy` if unset. All other flags and positional arguments are forwarded directly to the upstream CLI.
+
+## Shared flag
+
+<ParamField path="--base-url" default="http://localhost:8000" type="string">
+  Tinker API server URL. Sent to the underlying `tinker` CLI.
+</ParamField>
+
+## Common tasks
+
+List checkpoints:
+
+```bash
+rlcli checkpoint list
+```
+
+List training runs:
+
+```bash
+rlcli run list
+```
+
+Get details for a specific run:
+
+```bash
+rlcli run info <run-id>
+```
+
+List active sessions:
+
+```bash
+rlcli session list
+```
+
+## Exit codes
+
+<Info>
+  The exit code from the passthrough is forwarded directly from the subprocess. If the underlying `tinker` CLI exits with code `1`, rlcli also exits with code `1`.
+</Info>
+
+## Further reading
+
+For the full flag surface of each subcommand, see the upstream Tinker CLI documentation at [https://tinker-docs.thinkingmachines.ai/](https://tinker-docs.thinkingmachines.ai/).

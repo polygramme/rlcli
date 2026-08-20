@@ -1,0 +1,70 @@
+---
+title: "Sample from checkpoints and manage tinker runs"
+sidebarTitle: "Sample & Checkpoints"
+description: "Generate text from base models or fine-tuned checkpoints with rlcli sample. Manage checkpoints, runs, and sessions through tinker CLI passthrough commands."
+---
+
+rlcli provides two ways to interact with trained models: `rlcli sample` for quick generation from base models or checkpoints, and passthrough commands (`checkpoint`, `run`, `session`) that delegate to the official tinker CLI against your local server.
+
+## Sampling
+
+Use `rlcli sample` to generate text from a base model or a fine-tuned checkpoint. Sampling uses raw generation with no chat template applied.
+
+### Sample from a base model
+
+```bash
+rlcli sample --prompt "Explain reinforcement learning" --model Qwen/Qwen3-4B-Instruct-2507
+```
+
+### Sample from a checkpoint
+
+```bash
+rlcli sample --prompt "Explain reinforcement learning" --checkpoint tinker://<path-to-checkpoint>
+```
+
+### Common options
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--max-tokens` | Maximum tokens to generate | `256` |
+| `--temperature` | Sampling temperature | `1.0` |
+| `--base-url` | Tinker server URL | `http://localhost:8000` |
+
+<Note>
+  rlcli uses the model's tokenizer for encode and decode. You can override the tokenizer model name with the `RLCLI_TOKENIZER` environment variable.
+</Note>
+
+## Managing checkpoints and runs
+
+rlcli provides thin passthrough commands to the official tinker CLI. These set `TINKER_BASE_URL` to your local server and `TINKER_API_KEY=tml-dummy` if unset, then invoke `python -m tinker.cli <command>`.
+
+### List checkpoints
+
+```bash
+rlcli checkpoint list
+```
+
+### Inspect runs
+
+```bash
+rlcli run list
+rlcli run info <run-id>
+```
+
+### Session management
+
+```bash
+rlcli session list
+```
+
+These commands accept the same flags and arguments as the upstream tinker CLI. For full details on available subcommands and options, consult the official Tinker documentation at [tinker-docs.thinkingmachines.ai](https://tinker-docs.thinkingmachines.ai/).
+
+<Info>
+  The passthrough commands are `rlcli checkpoint`, `rlcli run`, and `rlcli session`. They are not native rlcli implementations but are pre-configured to talk to your local SkyRL server.
+</Info>
+
+## Next steps
+
+- See [`rlcli sample` CLI options](/cli/sample)
+- Learn about [Tinker Passthrough commands](/cli/passthrough)
+- Start [supervised fine-tuning](/guides/supervised-fine-tuning) to create checkpoints you can sample from

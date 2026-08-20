@@ -1,0 +1,112 @@
+---
+title: "Supervised fine-tune a model with rlcli train sl"
+sidebarTitle: "Supervised FT"
+description: "Learn how to run supervised fine-tuning with rlcli. Start a local SkyRL server, prepare a messages JSONL dataset, preview the config, and launch training."
+---
+
+rlcli makes it easy to run supervised fine-tuning (SFT) on your own GPUs through a local SkyRL Tinker server. This guide walks you through starting the server, preparing your dataset, previewing the training configuration, and launching the actual run.
+
+## Prerequisites
+
+Before you begin, make sure you have:
+
+- A running local server. See [`rlcli serve start`](/cli/serve) for details on launching SkyRL.
+- A dataset in messages JSONL format. See [Dataset Format](/concepts/dataset-format) for the expected structure.
+
+## Step-by-step
+
+<Steps>
+  <Step title="Start the server">
+    Launch a local SkyRL server with your base model and backend. For GPU training, use a torch backend such as `fsdp`:
+
+    ```bash
+    rlcli serve start --base-model Qwen/Qwen3-4B-Instruct-2507 --backend fsdp --gpus 1
+    ```
+
+    Wait for the server to become healthy. You can check status with `rlcli serve status`.
+  </Step>
+  <Step title="Prepare your dataset">
+    Your dataset should be a JSONL file where each line contains a conversation object:
+
+    ```json
+    {"messages": [{"role": "user", "content": "What is 2+2?"}, {"role": "assistant", "content": "4"}]}
+    {"messages": [{"role": "user", "content": "Explain photosynthesis."}, {"role": "assistant", "content": "Plants convert light into chemical energy..."}]}
+    ```
+
+    If you have raw chat dumps from OpenAI or Anthropic, use [`rlcli import`](/guides/importing-traces) to normalize them first:
+
+    ```bash
+    rlcli import prod.jsonl -f openai -o clean.jsonl
+    ```
+
+    You can also pipe imported traces directly into training:
+
+    ```bash
+    rlcli import prod.jsonl -f openai | rlcli train sl --dataset - --model Qwen/Qwen3-4B-Instruct-2507
+    ```
+  </Step>
+  <Step title="Preview the training config">
+    Use `--dry-run` to print the full training configuration without starting training. This helps you verify flags, paths, and renderer selection before consuming GPU time.
+
+    ```bash
+    rlcli train sl \
+      --model Qwen/Qwen3-4B-Instruct-2507 \
+      --dataset clean.jsonl \
+      --batch-size 8 \
+      --lr 1e-4 \
+      --max-length 2048 \
+      --epochs 1 \
+      --lora-rank 32 \
+      --save-every 20 \
+      --test-size 100 \
+      --dry-run
+    ```
+  </Step>
+  <Step title="Run training">
+    Remove `--dry-run` to start the actual supervised fine-tuning job:
+
+    ```bash
+    rlcli train sl \
+      --model Qwen/Qwen3-4B-Instruct-2507 \
+      --dataset clean.jsonl \
+      --batch-size 8 \
+      --lr 1e-4 \
+      --max-length 2048 \
+      --epochs 1 \
+      --lora-rank 32 \
+      --save-every 20 \
+      --test-size 100
+    ```
+
+    Training logs are written to the default log path, `~/.rlcli/runs/sl-<timestamp>`.
+  </Step>
+  <Step title="Inspect the run">
+    After training, list available checkpoints:
+
+    ```bash
+    rlcli checkpoint list
+    ```
+
+    You can sample from a checkpoint using its `tinker://...` path:
+
+    ```bash
+    rlcli sample --prompt "What is 5+7?" --checkpoint tinker://<path>
+    ```
+  </Step>
+</Steps>
+
+## Renderer selection
+
+rlcli auto-detects the recommended renderer for your model via tinker-cookbook's `model_info.get_recommended_renderer_name`. If you are using an unknown or custom model, pass the renderer explicitly:
+
+```bash
+rlcli train sl --model my-org/my-model --renderer llama3 ...
+```
+
+Available renderers include `qwen3_instruct`, `llama3`, and others provided by tinker-cookbook.
+
+## Next steps
+
+- Learn about all [`train sl` options](/cli/train)
+- Convert chat dumps with [`rlcli import`](/guides/importing-traces)
+- Explore [reinforcement learning](/guides/reinforcement-learning) after SFT

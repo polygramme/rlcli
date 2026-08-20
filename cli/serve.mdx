@@ -1,0 +1,128 @@
+---
+title: "rlcli serve: manage local SkyRL Tinker server"
+sidebarTitle: "serve"
+description: "Start, stop, check, and tail logs for the local SkyRL Tinker server that powers rlcli training and sampling."
+---
+
+rlcli uses a managed local Tinker server backed by SkyRL. The server runs out of a pinned SkyRL source checkout via `uv run` and exposes the Tinker HTTP API so rlcli can train and sample against it. Use `rlcli serve` to start, stop, inspect, and debug that server.
+
+## serve start
+
+Start the managed SkyRL Tinker server.
+
+```bash
+rlcli serve start --base-model <MODEL> [OPTIONS]
+```
+
+### Flags
+
+<ParamField path="--base-model" type="string" required>
+  HuggingFace model name or local path to load.
+</ParamField>
+
+<ParamField path="--backend" default="jax" type="choice">
+  Training backend. Choices: `jax`, `fsdp`, `megatron`.
+
+  - `jax`: runs anywhere, including CPU and macOS. Serves `cross_entropy`, `importance_sampling`, `ppo`, and `cispo`.
+  - `fsdp` / `megatron`: require Linux and CUDA. Serve the full loss set including `gspo`, `cispo`, `dppo`, and `ppo_critic`.
+</ParamField>
+
+<ParamField path="--port" default="8000" type="int">
+  HTTP port for the Tinker API.
+</ParamField>
+
+<ParamField path="--gpus" type="int">
+  GPUs per node. Also configures one vLLM engine per GPU. Only valid for torch backends (`fsdp`, `megatron`).
+</ParamField>
+
+<ParamField path="--nodes" type="int">
+  Number of training nodes. Only valid for torch backends.
+</ParamField>
+
+<ParamField path="--tp" type="int">
+  Tensor-parallel size per inference engine. Only valid for torch backends. The number of engines becomes `max(1, gpus // tp)`.
+</ParamField>
+
+<ParamField path="--checkpoints-base" type="string">
+  Base directory for checkpoints. Defaults to the server's default.
+</ParamField>
+
+<ParamField path="--max-model-len" default="16384" type="int">
+  Cap the vLLM context length on torch backends. Set to `0` to use the model's native context length. Be careful: uncapped native contexts on large models like Qwen3-4B-Instruct-2507 (262K) can segfault vLLM. Any explicit non-default value is trusted as-is.
+</ParamField>
+
+<ParamField path="--backend-config" type="JSON string">
+  Raw SkyRL-Train configuration overrides, merged last. Nested dictionaries like `engine_init_kwargs` are merged rather than overwritten. User keys win over rlcli defaults.
+</ParamField>
+
+<ParamField path="--wait" default="900" type="int">
+  Startup timeout in seconds.
+</ParamField>
+
+### Example
+
+```bash
+rlcli serve start --base-model Qwen/Qwen3-4B-Instruct-2507 \
+  --backend fsdp --gpus 8 --tp 2 --max-model-len 32768
+```
+
+## serve stop
+
+Stop the managed server.
+
+```bash
+rlcli serve stop
+```
+
+rlcli sends `SIGTERM` to the server process group. If the process does not exit within 30 seconds, it sends `SIGKILL`. The server state file is removed on success.
+
+## serve status
+
+Print the current managed server state and a health check.
+
+```bash
+rlcli serve status
+```
+
+Output includes the contents of `~/.rlcli/server.json` plus a `healthy` boolean from `GET /docs`. If no managed server is running, the command prints:
+
+```text
+No managed server running.
+```
+
+## serve logs
+
+Tail the server log.
+
+```bash
+rlcli serve logs [OPTIONS]
+```
+
+### Flags
+
+<ParamField path="-n" default="40" type="int">
+  Number of trailing lines to print from `~/.rlcli/server.log`.
+</ParamField>
+
+### Example
+
+```bash
+rlcli serve logs -n 100
+```
+
+## Server paths and environment
+
+- **State file:** `~/.rlcli/server.json`
+- **Log file:** `~/.rlcli/server.log`
+- **SkyRL checkout:** `~/.rlcli/skyrl-src`
+
+Override the checkout path with the `RLCLI_SKYRL_SOURCE` environment variable, or change the entire home directory with `RLCLI_HOME`.
+
+## Errors
+
+`ServerError` is raised in these situations:
+
+- Server exits early during startup
+- Startup exceeds the `--wait` timeout
+- An unknown backend is specified
+- A duplicate managed server is already running

@@ -1,0 +1,94 @@
+---
+title: "Turn chat dumps into training data with rlcli import"
+sidebarTitle: "Import Traces"
+description: "Convert raw chat dumps from OpenAI, Anthropic, or messages JSONL into clean training data with rlcli import. Filter, normalize roles, and pipe directly into training."
+---
+
+rlcli `import` reads raw chat dumps and writes normalized messages JSONL suitable for supervised fine-tuning. It supports OpenAI chat-completions dumps, Anthropic Messages API dumps, and pre-shaped messages JSONL. This guide covers formats, role normalization, filtering, and piping into training.
+
+## Supported formats
+
+<CardGroup cols={3}>
+  <Card title="messages (default)" icon="message-square">
+    Each line is already a `{"messages": [...]}` object. Passed through with validation.
+  </Card>
+
+  <Card title="openai" icon="bot">
+    Chat-completions API dumps. Tool call turns are dropped because their flattened content is empty.
+  </Card>
+
+  <Card title="anthropic" icon="message-circle">
+    Messages API dumps. Content blocks are flattened and the top-level `system` message is kept as a system message.
+  </Card>
+</CardGroup>
+
+## Step-by-step
+
+<Steps>
+  <Step title="Point at your raw dumps">
+    Identify the format of your JSONL file. For example, `prod-traces.jsonl` might contain Anthropic Messages API responses.
+  </Step>
+  <Step title="Convert to messages JSONL">
+    Run `rlcli import` with the correct format flag and output path:
+
+    ```bash
+    rlcli import prod-traces.jsonl -f anthropic -o clean.jsonl
+    ```
+
+    For OpenAI dumps:
+
+    ```bash
+    rlcli import prod.jsonl -f openai -o clean.jsonl
+    ```
+  </Step>
+  <Step title="Pipe directly into training">
+    You can stream imported traces straight into supervised fine-tuning without writing an intermediate file:
+
+    ```bash
+    rlcli import prod.jsonl -f openai | rlcli train sl --dataset - --model Qwen/Qwen3-4B-Instruct-2507
+    ```
+  </Step>
+</Steps>
+
+## Role normalization
+
+rlcli normalizes roles to the standard `user`, `assistant`, and `system` set. Unsupported roles are dropped.
+
+| Source role | Normalized to | Handling |
+| --- | --- | --- |
+| `human` | `user` | Renamed |
+| `ai`, `model` | `assistant` | Renamed |
+| `system` | `system` | Kept as-is |
+| `tool`, `function`, `tool_result` | dropped | Removed entirely |
+
+## Content flattening
+
+- String content is kept as-is.
+- Anthropic-style content blocks: `type: "text"` blocks are joined with newlines.
+- `tool_use`, `tool_result`, `image`, and `thinking` blocks are dropped.
+- Empty flattened messages are skipped.
+
+## Filtering options
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--min-messages` | Minimum usable messages per conversation (must also have at least one assistant message) | `2` |
+| `--limit` | Stop after N conversations | none |
+
+## Failure modes
+
+rlcli fails loud with clear errors and line numbers:
+
+- `--format messages` on OpenAI dumps: `ImportFormatError` with line number, because OpenAI dumps lack a `messages` key
+- Invalid JSON: error includes the offending line number
+- Unknown format flag: clear usage error listing supported formats
+
+<Note>
+  Imported traces are for supervised fine-tuning and distillation. For reinforcement learning, you need an environment and reward function. See [RL Training](/guides/reinforcement-learning) and [Harbor Agent RL](/guides/harbor-agent-rl).
+</Note>
+
+## Next steps
+
+- See all [`rlcli import` options](/cli/import)
+- Review the expected [Dataset Format](/concepts/dataset-format)
+- Start [supervised fine-tuning](/guides/supervised-fine-tuning) with your cleaned data

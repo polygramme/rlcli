@@ -1,0 +1,286 @@
+---
+title: "rlcli train: one-shot SL, RL, and Harbor agent training"
+sidebarTitle: "train"
+description: "Use rlcli train sl, rl, and harbor to run supervised fine-tuning, RL on GSM8K, and sandboxed Harbor agent RL on local GPUs."
+---
+
+rlcli provides three training subcommands under `train`: `sl` for supervised fine-tuning, `rl` for reinforcement learning on math benchmarks, and `harbor` for sandboxed agent RL. Each subcommand sends requests to the Tinker API at `--base-url` and automatically sets `TINKER_API_KEY=tml-dummy`.
+
+<Tabs>
+  <Tab title="sl">
+    ## train sl
+
+    Supervised fine-tune a model on a messages JSONL dataset.
+
+    ```bash
+    rlcli train sl --dataset <PATH> --model <MODEL> [OPTIONS]
+    ```
+
+    ### Flags
+
+    <ParamField path="--dataset" type="string" required>
+      Path to a JSONL file, or `-` to read from stdin.
+    </ParamField>
+
+    <ParamField path="--model" type="string" required>
+      HuggingFace model name or path.
+    </ParamField>
+
+    <ParamField path="--base-url" default="http://localhost:8000" type="string">
+      Tinker API server URL.
+    </ParamField>
+
+    <ParamField path="--renderer" type="string">
+      Renderer to use. Defaults to the recommended renderer for the model.
+    </ParamField>
+
+    <ParamField path="--batch-size" default="8" type="int">
+      Training batch size.
+    </ParamField>
+
+    <ParamField path="--lr" default="1e-4" type="float">
+      Learning rate.
+    </ParamField>
+
+    <ParamField path="--max-length" default="2048" type="int">
+      Maximum sequence length for training examples.
+    </ParamField>
+
+    <ParamField path="--epochs" default="1" type="int">
+      Number of training epochs.
+    </ParamField>
+
+    <ParamField path="--lora-rank" default="32" type="int">
+      LoRA rank.
+    </ParamField>
+
+    <ParamField path="--save-every" default="20" type="int">
+      Save a checkpoint every N steps.
+    </ParamField>
+
+    <ParamField path="--test-size" default="0" type="float">
+      Fraction of data to hold out for evaluation.
+    </ParamField>
+
+    <ParamField path="--log-path" default="~/.rlcli/runs/sl-<timestamp>" type="string">
+      Directory for training logs.
+    </ParamField>
+
+    <ParamField path="--dry-run" type="flag">
+      Print the training plan without executing.
+    </ParamField>
+
+    ### Example
+
+    ```bash
+    rlcli train sl --dataset clean.jsonl --model Qwen/Qwen3-4B-Instruct-2507 \
+      --batch-size 16 --lr 2e-4 --epochs 2
+    ```
+  </Tab>
+  <Tab title="rl">
+    ## train rl
+
+    Run reinforcement learning on GSM8K.
+
+    ```bash
+    rlcli train rl --model <MODEL> [OPTIONS]
+    ```
+
+    ### Flags
+
+    <ParamField path="--model" type="string" required>
+      HuggingFace model name or path.
+    </ParamField>
+
+    <ParamField path="--base-url" default="http://localhost:8000" type="string">
+      Tinker API server URL.
+    </ParamField>
+
+    <ParamField path="--loss" default="importance_sampling" type="choice">
+      RL loss to use. All losses are available; the server must support the chosen one.
+    </ParamField>
+
+    <ParamField path="--loss-config" type="JSON string">
+      Raw JSON overrides for the loss function configuration.
+    </ParamField>
+
+    <ParamField path="--backend" type="choice">
+      Backend hint for the loss guard. Choices: `jax`, `fsdp`, `megatron`. Auto-detected for managed servers.
+    </ParamField>
+
+    <ParamField path="--dataset" default="gsm8k" type="choice">
+      Dataset to train on. The only supported choice is `gsm8k`.
+    </ParamField>
+
+    <ParamField path="--renderer" type="string">
+      Renderer to use. Defaults to the recommended renderer for the model.
+    </ParamField>
+
+    <ParamField path="--batch-size" default="64" type="int">
+      Training batch size.
+    </ParamField>
+
+    <ParamField path="--group-size" default="8" type="int">
+      Group size for grouped RL.
+    </ParamField>
+
+    <ParamField path="--lr" default="4e-5" type="float">
+      Learning rate.
+    </ParamField>
+
+    <ParamField path="--max-tokens" default="256" type="int">
+      Maximum tokens to generate per response.
+    </ParamField>
+
+    <ParamField path="--lora-rank" default="32" type="int">
+      LoRA rank.
+    </ParamField>
+
+    <ParamField path="--save-every" default="20" type="int">
+      Save a checkpoint every N steps.
+    </ParamField>
+
+    <ParamField path="--eval-every" default="0" type="int">
+      Run evaluation every N steps. `0` disables evaluation.
+    </ParamField>
+
+    <ParamField path="--max-steps" type="int">
+      Maximum number of training steps.
+    </ParamField>
+
+    <ParamField path="--log-path" type="string">
+      Directory for training logs.
+    </ParamField>
+
+    <ParamField path="--dry-run" type="flag">
+      Print the training plan without executing.
+    </ParamField>
+
+    ### Example
+
+    ```bash
+    rlcli train rl --model Qwen/Qwen3-4B-Instruct-2507 --loss ppo \
+      --batch-size 32 --group-size 4 --max-steps 100
+    ```
+  </Tab>
+  <Tab title="harbor">
+    ## train harbor
+
+    Run sandboxed Harbor agent RL on terminal-bench or your own task dataset.
+
+    ```bash
+    rlcli train harbor --model <MODEL> [OPTIONS]
+    ```
+
+    ### Flags
+
+    <ParamField path="--model" type="string" required>
+      HuggingFace model name or path.
+    </ParamField>
+
+    <ParamField path="--base-url" default="http://localhost:8000" type="string">
+      Tinker API server URL.
+    </ParamField>
+
+    <ParamField path="--loss" default="importance_sampling" type="choice">
+      RL loss to use.
+    </ParamField>
+
+    <ParamField path="--loss-config" type="JSON string">
+      Raw JSON overrides for the loss function configuration.
+    </ParamField>
+
+    <ParamField path="--backend" type="choice">
+      Backend hint for the loss guard. Choices: `jax`, `fsdp`, `megatron`. Auto-detected for managed servers.
+    </ParamField>
+
+    <ParamField path="--dataset" default="terminal-bench@2.0" type="string">
+      Task dataset. Defaults to `terminal-bench@2.0` and auto-downloads via `uvx harbor datasets download` if missing.
+    </ParamField>
+
+    <ParamField path="--sandbox" default="docker" type="choice">
+      Sandbox backend. Choices: `docker`, `modal`.
+    </ParamField>
+
+    <ParamField path="--task-filter" type="string">
+      Filter tasks by name or pattern.
+    </ParamField>
+
+    <ParamField path="--limit" type="int">
+      Maximum number of tasks to use.
+    </ParamField>
+
+    <ParamField path="--renderer" type="string">
+      Renderer to use. Defaults to the recommended renderer for the model.
+    </ParamField>
+
+    <ParamField path="--group-size" default="4" type="int">
+      Group size for grouped RL.
+    </ParamField>
+
+    <ParamField path="--groups-per-batch" default="4" type="int">
+      Number of groups per batch.
+    </ParamField>
+
+    <ParamField path="--lr" default="1e-5" type="float">
+      Learning rate.
+    </ParamField>
+
+    <ParamField path="--max-tokens" default="4096" type="int">
+      Maximum tokens to generate per response.
+    </ParamField>
+
+    <ParamField path="--max-turns" default="10" type="int">
+      Maximum turns per agent episode.
+    </ParamField>
+
+    <ParamField path="--lora-rank" default="32" type="int">
+      LoRA rank.
+    </ParamField>
+
+    <ParamField path="--save-every" default="5" type="int">
+      Save a checkpoint every N steps.
+    </ParamField>
+
+    <ParamField path="--eval-every" default="0" type="int">
+      Run evaluation every N steps. `0` disables evaluation.
+    </ParamField>
+
+    <ParamField path="--max-steps" type="int">
+      Maximum number of training steps.
+    </ParamField>
+
+    <ParamField path="--sandbox-timeout" default="3600" type="int">
+      Timeout for the sandbox environment in seconds.
+    </ParamField>
+
+    <ParamField path="--command-timeout" default="120" type="int">
+      Timeout for individual commands inside the sandbox in seconds.
+    </ParamField>
+
+    <ParamField path="--log-path" type="string">
+      Directory for training logs.
+    </ParamField>
+
+    <ParamField path="--dry-run" type="flag">
+      Print the training plan without executing.
+    </ParamField>
+
+    ### Example
+
+    ```bash
+    rlcli train harbor --model Qwen/Qwen3-4B-Instruct-2507 \
+      --dataset terminal-bench@2.0 --sandbox docker --max-steps 50
+    ```
+  </Tab>
+</Tabs>
+
+## Common notes
+
+- `TINKER_API_KEY` is set to `tml-dummy` automatically if unset.
+- `TINKER_BASE_URL` is forwarded automatically.
+- The loss guard runs before training begins and fails fast with a clear message if the selected loss is unsupported by the backend.
+
+<Warning>
+  `gspo` has a known upstream packing-order bug on multi-GPU and Megatron setups (NovaSky-AI/SkyRL#2043). Single-GPU FSDP is verified clean. rlcli prints a warning to stderr when `--loss gspo` is used.
+</Warning>

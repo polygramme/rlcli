@@ -1,0 +1,69 @@
+---
+title: "rlcli: Tinker-API post-training on your own GPUs"
+sidebarTitle: "Introduction"
+description: "rlcli is a Python CLI for one-shot Tinker-API post-training on your own GPUs, backed by SkyRL. Install, serve, train, and sample locally."
+---
+
+rlcli is a Python CLI that gives you one-shot Tinker-API post-training on your own GPUs, backed by SkyRL. The Tinker API separates training logic from infrastructure, and SkyRL implements that API locally with fused RL losses. The official `tinker` CLI has no `train` verb, and SkyRL has no CLI: rlcli is the missing front door that wires them together so you can serve a model, run SFT or RL, and sample from checkpoints without leaving your terminal.
+
+<Note>
+  This package is `rlcli` on PyPI. Do not confuse it with `rl-cli` (Runloop's CLI), which is a different tool.
+</Note>
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Go from install to your first local training run in minutes.
+  </Card>
+
+  <Card title="Installation" icon="download" href="/installation">
+    Install rlcli, extras, and the prerequisites for your backend.
+  </Card>
+
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    How rlcli, SkyRL, the Tinker API, and the tinker client fit together.
+  </Card>
+
+  <Card title="CLI Overview" icon="terminal" href="/cli/overview">
+    Browse all commands: serve, train, import, sample, and Tinker passthrough.
+  </Card>
+</CardGroup>
+
+## What you can do
+
+<CardGroup cols={2}>
+  <Card title="Supervised Fine-Tuning" icon="book" href="/guides/supervised-fine-tuning">
+    Run SFT on a messages JSONL dataset with LoRA and configurable hyperparameters.
+  </Card>
+
+  <Card title="Reinforcement Learning" icon="rotate" href="/guides/reinforcement-learning">
+    Train with RL losses like PPO, GSPO, and CISPO on GSM8K using your local server.
+  </Card>
+
+  <Card title="Harbor Agent RL" icon="ship" href="/guides/harbor-agent-rl">
+    Train agentic models with Harbor tasks in a sandboxed Docker or Modal environment.
+  </Card>
+
+  <Card title="Import Traces" icon="file-import" href="/guides/importing-traces">
+    Normalize chat dumps from OpenAI, Anthropic, or messages JSONL into training-ready data.
+  </Card>
+</CardGroup>
+
+## One-liners
+
+```bash
+# Start a local SkyRL server
+rlcli serve start --base-model Qwen/Qwen3-4B-Instruct-2507 --backend fsdp --gpus 8
+
+# Supervised fine-tuning
+rlcli train sl --model Qwen/Qwen3-4B-Instruct-2507 --dataset conversations.jsonl
+
+# RL with GSPO
+rlcli train rl --model Qwen/Qwen3-4B-Instruct-2507 --loss gspo --dataset gsm8k
+
+# Import chat dumps and pipe straight into training
+rlcli import prod.jsonl -f openai | rlcli train sl --dataset - --model Qwen/Qwen3-4B-Instruct-2507
+```
+
+rlcli is open source under the Apache-2.0 license.

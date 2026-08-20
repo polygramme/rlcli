@@ -1,0 +1,62 @@
+---
+title: "rlcli sample: quick generation against a server"
+sidebarTitle: "sample"
+description: "Generate raw text from a base model or a Tinker checkpoint using rlcli sample, with tokenizer-based encode and decode."
+---
+
+rlcli sample lets you run quick raw generation against a running Tinker server. It does not apply a chat template. Pass either a base model name or a `tinker://` checkpoint path, and the prompt text is encoded with the model tokenizer before being sent.
+
+## Usage
+
+```bash
+rlcli sample --prompt "<TEXT>" (--model <MODEL> | --checkpoint <PATH>) [OPTIONS]
+```
+
+## Flags
+
+<ParamField path="--prompt" type="string" required>
+  Prompt text to send to the model.
+</ParamField>
+
+<ParamField path="--model" type="string">
+  Base HuggingFace model name or path. Required unless `--checkpoint` is provided.
+</ParamField>
+
+<ParamField path="--checkpoint" type="string">
+  Tinker checkpoint path, e.g. `tinker://...`. Required unless `--model` is provided.
+</ParamField>
+
+<ParamField path="--base-url" default="http://localhost:8000" type="string">
+  Tinker API server URL.
+</ParamField>
+
+<ParamField path="--max-tokens" default="256" type="int">
+  Maximum number of tokens to generate.
+</ParamField>
+
+<ParamField path="--temperature" default="1.0" type="float">
+  Sampling temperature.
+</ParamField>
+
+## Tokenizer resolution
+
+- When `--model` is provided, rlcli uses that model name to load the tokenizer.
+- When only `--checkpoint` is provided, rlcli falls back to the `RLCLI_TOKENIZER` environment variable for the tokenizer name or path. If neither is set, the command fails.
+
+## Examples
+
+Sample from a base model:
+
+```bash
+rlcli sample --prompt "Explain quantum computing in one sentence." \
+  --model Qwen/Qwen3-4B-Instruct-2507 \
+  --max-tokens 128 --temperature 0.7
+```
+
+Sample from a trained checkpoint:
+
+```bash
+rlcli sample --prompt "What is 7 * 8?" \
+  --checkpoint tinker://runs/2025-01-15/checkpoint-20 \
+  --max-tokens 64 --temperature 0.2
+```
