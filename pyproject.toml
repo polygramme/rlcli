@@ -1,5 +1,5 @@
 [project]
-name = "rlcli"
+name = "polygramme-rlcli"
 version = "0.1.0.dev0"
 description = "One-shot CLI for Tinker-API post-training on your own GPUs (SkyRL backend): serve, train, and fused RL losses like forward_backward('gspo') in a single command."
 readme = "README.md"
@@ -31,7 +31,7 @@ dev = ["pytest>=8"]
 rlcli = "rlcli.cli:main"
 
 [project.urls]
-Repository = "https://github.com/rlcli/rlcli"
+Repository = "https://github.com/polygramme/rlcli"
 
 [build-system]
 requires = ["hatchling"]
