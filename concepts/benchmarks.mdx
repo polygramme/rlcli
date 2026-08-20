@@ -1,0 +1,70 @@
+---
+title: "GSPO benchmark: fused 1-pass vs 2-pass custom loss"
+sidebarTitle: "Benchmarks"
+description: "Measured step-time and throughput for fused GSPO on a SkyRL server compared to the 2-pass fetch-logprobs-then-reweight pattern hosted Tinker requires."
+---
+
+The `benchmarks/bench_gspo.py` script measures why fused GSPO on a SkyRL backend matters: it times the same frozen rollout batch on the same server two ways, once through the native fused path `forward_backward(loss_fn="gspo")` and once through the round-trip pattern hosted Tinker forces for losses it does not serve natively (`forward` to fetch logprobs, compute sequence-level GSPO weights on the client, then `forward_backward(loss_fn="importance_sampling")` with the reweighted batch).
+
+## What it measures
+
+<Info>
+  Path B reproduces the 2-pass wire pattern exactly. The client-side sequence-level clipped ratio computation is an approximation of GSPO gradients, but the quantity being measured (wall-clock per step) is the real cost of the 2-pass round-trip.
+</Info>
+
+- **A (native, 1 pass)**: `forward_backward(datums, loss_fn="gspo", loss_fn_config={"clip_low_threshold": 0.8, "clip_high_threshold": 1.2})` then `optim_step`.
+- **B (custom, 2 pass)**: `forward(datums, loss_fn="cross_entropy")` to fetch per-token logprobs, compute sequence-level clipped importance ratios client-side, then `forward_backward(reweighted, loss_fn="importance_sampling")` and `optim_step`.
+
+The batch is real rollout data: 16 GSM8K-style prompts sampled once from the model at startup with variable output lengths, then frozen and reused for every step of both paths so the comparison isolates the wire pattern.
+
+## Latest result
+
+Measured on `Qwen/Qwen3-4B-Instruct-2507` with `--lora-rank 32`, 16 sequences, 7,569 total target tokens per step, 8 timed steps after a warmup.
+
+| Path | Mean step time | Stdev | Tokens/s |
+| --- | --- | --- | --- |
+| `native_1pass` (fused GSPO) | 12.92 s | 0.23 s | 586.0 |
+| `custom_2pass` (round-trip) | 16.77 s | 0.46 s | 451.3 |
+
+**Fused GSPO cuts step time by 23.0% and lifts throughput by 29.8%** on this configuration. The full JSON with per-step timings is written to `benchmarks/last_gspo_bench.json`.
+
+## Run it yourself
+
+<Steps>
+  <Step title="Start a torch-backend server">
+    Fused GSPO requires an FSDP or Megatron backend. See [Backends & Losses](/concepts/backends-and-losses) for the loss matrix.
+
+    ```bash
+    rlcli serve start \
+      --base-model Qwen/Qwen3-4B-Instruct-2507 \
+      --backend fsdp \
+      --gpus 1
+    ```
+  </Step>
+  <Step title="Run the benchmark">
+    ```bash
+    python benchmarks/bench_gspo.py \
+      --base-url http://localhost:8000 \
+      --model Qwen/Qwen3-4B-Instruct-2507
+    ```
+
+    Optional flags: `--steps` (default 8), `--max-tokens` (default 512), `--lora-rank` (default 32).
+  </Step>
+  <Step title="Read the summary">
+    The script prints a `BENCH_RESULT` line with the summary JSON and writes the full per-step record to `benchmarks/last_gspo_bench.json`.
+
+    ```json
+    {
+      "model": "Qwen/Qwen3-4B-Instruct-2507",
+      "batch_seqs": 16,
+      "total_tokens_per_step": 7569,
+      "step_time_reduction_pct": 23.0,
+      "throughput_gain_pct": 29.8
+    }
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  Single-GPU FSDP is verified clean for fused GSPO. Multi-GPU Megatron DP configs currently hit an upstream packing-order bug (see [Backends & Losses](/concepts/backends-and-losses)).
+</Tip>
