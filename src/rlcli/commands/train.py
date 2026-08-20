@@ -260,6 +260,11 @@ def harbor(model_name, base_url, loss, loss_config, backend_hint, dataset, sandb
     )
     from tinker_cookbook.rl import train as rl_train
 
+    from rlcli.tokenizer_lock import register_locked_tokenizer
+
+    # Concurrent env rendering + shared fast tokenizer = "Already borrowed".
+    register_locked_tokenizer(model_name)
+
     dataset_dir = HARBOR_CACHE_DIR / dataset
     if not dataset_dir.is_dir():
         click.echo(f"Downloading harbor dataset {dataset} to {dataset_dir} …")
