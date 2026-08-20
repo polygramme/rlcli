@@ -1,3 +1,4 @@
+import pytest
 from click.testing import CliRunner
 
 from rlcli.cli import main_cli
@@ -46,6 +47,7 @@ def test_train_rl_guard_allows_gspo_on_fsdp():
 
 
 def test_train_unknown_model_gets_clear_renderer_error():
+    pytest.importorskip("tinker_cookbook")  # renderer lookup needs the train extra
     result = _run("train", "rl", "--model", "some/unknown-model", "--loss", "ppo",
                   "--backend", "fsdp", "--dry-run")
     assert result.exit_code != 0
