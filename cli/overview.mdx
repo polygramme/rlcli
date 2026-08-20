@@ -1,0 +1,85 @@
+---
+title: "rlcli CLI reference and command summary"
+sidebarTitle: "Overview"
+description: "Explore all rlcli top-level commands, environment variables, and shared behavior from installation to one-shot training and sampling."
+---
+
+rlcli is a lazy-loaded Click CLI that orchestrates local SkyRL-backed Tinker-API post-training on your own GPUs. This page lists every top-level command and the environment variables that control state, paths, and server endpoints so you can find the right tool quickly.
+
+## Command structure
+
+rlcli uses a lazy-loaded Click group. Subcommands are loaded on demand, so `--help` on the top level is fast. Run `rlcli --help` to see the full list, or `rlcli <command> --help` for a specific subcommand.
+
+```bash
+rlcli --help
+```
+
+## Top-level commands
+
+| Command | Description |
+| --- | --- |
+| `import` | Normalize chat dumps into messages JSONL for supervised fine-tuning. |
+| `serve` | Start, stop, check, and tail logs for the local SkyRL Tinker server. |
+| `train` | One-shot training with `sl`, `rl`, and `harbor` subcommands. |
+| `sample` | Quick raw generation against a running server. |
+| `checkpoint` | Passthrough to the official `tinker checkpoint` CLI. |
+| `run` | Passthrough to the official `tinker run` CLI. |
+| `session` | Passthrough to the official `tinker session` CLI. |
+| `version` | Show rlcli version and dependency pins. |
+
+## Environment variables
+
+<ParamField path="RLCLI_HOME" default="~/.rlcli" type="string">
+  Base directory for rlcli state, logs, and the SkyRL source checkout.
+</ParamField>
+
+<ParamField path="RLCLI_SKYRL_SOURCE" type="string">
+  Path to an existing SkyRL checkout. When set, rlcli uses this instead of cloning into `~/.rlcli/skyrl-src`.
+</ParamField>
+
+<ParamField path="TINKER_BASE_URL" default="http://localhost:8000" type="string">
+  URL of the Tinker API server. Defaults to `http://localhost:8000` if unset.
+</ParamField>
+
+<ParamField path="TINKER_API_KEY" default="tml-dummy" type="string">
+  API key for the Tinker SDK. rlcli sets `tml-dummy` if unset because the SDK requires a value even against local servers that ignore it.
+</ParamField>
+
+<ParamField path="RLCLI_TOKENIZER" type="string">
+  Fallback tokenizer name or path for `rlcli sample` when you only pass `--checkpoint` and no `--model`.
+</ParamField>
+
+## Global flags
+
+- `-h`, `--help`: Show help message for any command or subcommand.
+
+## Error handling
+
+rlcli catches common errors and prints them as `Error: <message>` with exit code `1`. You will not see a full Python traceback for:
+
+- `LossBackendError`: thrown when a chosen loss is not supported by the selected backend.
+- `ServerError`: thrown on startup failures, timeouts, unknown backends, or duplicate server processes.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="serve" icon="server" href="/cli/serve">
+    Manage your local SkyRL Tinker server
+  </Card>
+
+  <Card title="train" icon="code" href="/cli/train">
+    Run supervised, RL, or Harbor agent training
+  </Card>
+
+  <Card title="import" icon="file-import" href="/cli/import">
+    Normalize chat dumps to messages JSONL
+  </Card>
+
+  <Card title="sample" icon="wand-magic-sparkles" href="/cli/sample">
+    Quick generation against a checkpoint or base model
+  </Card>
+
+  <Card title="Tinker Passthrough" icon="arrow-right" href="/cli/passthrough">
+    Use checkpoint, run, and session as native tinker commands
+  </Card>
+</CardGroup>

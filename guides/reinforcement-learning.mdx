@@ -1,0 +1,93 @@
+---
+title: "Run RL on gsm8k with fused losses"
+sidebarTitle: "RL Training"
+description: "Train a model with RL on gsm8k using rlcli. Start a torch backend server, choose a fused loss, preview the config, and launch training with loss guard protection."
+---
+
+rlcli lets you run reinforcement learning (RL) training on the gsm8k benchmark using a variety of loss functions, including fused losses like gspo. This guide covers starting the right backend, selecting a supported loss, and launching a training run with config preview and loss guard validation.
+
+## Prerequisites
+
+Fused losses such as `gspo`, `dppo`, and `ppo_critic` require a torch backend server running on Linux with CUDA. Use `--backend fsdp` or `--backend megatron` when starting the server. The JAX backend does not support these fused losses.
+
+For a full matrix of which losses work on which backends, see [Backends & Losses](/concepts/backends-and-losses).
+
+## Step-by-step
+
+<Steps>
+  <Step title="Start a torch backend server">
+    Launch SkyRL with `fsdp` (or `megatron`) and allocate GPUs:
+
+    ```bash
+    rlcli serve start --base-model Qwen/Qwen3-4B-Instruct-2507 --backend fsdp --gpus 1
+    ```
+
+    Verify the server is healthy before proceeding:
+
+    ```bash
+    rlcli serve status
+    ```
+  </Step>
+  <Step title="Preview the RL config">
+    Use `--dry-run` to inspect the training configuration before committing GPU time. Include your chosen loss and any loss-specific config:
+
+    ```bash
+    rlcli train rl \
+      --model Qwen/Qwen3-4B-Instruct-2507 \
+      --loss gspo \
+      --loss-config '{"clip_low_threshold": 0.8}' \
+      --group-size 8 \
+      --batch-size 64 \
+      --lr 4e-5 \
+      --max-tokens 256 \
+      --lora-rank 32 \
+      --save-every 20 \
+      --max-steps 200 \
+      --dry-run
+    ```
+  </Step>
+  <Step title="Run RL training">
+    Remove `--dry-run` to start training:
+
+    ```bash
+    rlcli train rl \
+      --model Qwen/Qwen3-4B-Instruct-2507 \
+      --loss gspo \
+      --loss-config '{"clip_low_threshold": 0.8}' \
+      --group-size 8 \
+      --batch-size 64 \
+      --lr 4e-5 \
+      --max-tokens 256 \
+      --lora-rank 32 \
+      --save-every 20 \
+      --max-steps 200
+    ```
+
+    rlcli validates your loss against the backend before training starts. If the loss is unsupported, you get a clear `LossBackendError` with a hint to switch backends.
+  </Step>
+</Steps>
+
+## Loss guard
+
+rlcli calls `ensure_loss_supported(loss, backend)` before training begins. This fails fast with a clear error if your chosen loss is incompatible with the active backend.
+
+- If rlcli manages the server (local `rlcli serve start`), the guard knows the exact backend and rejects unsupported combinations immediately.
+- If you point at a remote or unmanaged `--base-url`, the guard only rejects entirely unknown losses. Provide `--backend fsdp` as a hint when using a remote server so the guard can still validate fused losses.
+
+## Important warnings
+
+<Warning>
+  **gspo multi-GPU / Megatron bug**
+
+  gspo has a known upstream packing-order bug on multi-GPU and Megatron configurations (NovaSky-AI/SkyRL#2043). Single-GPU FSDP is verified clean. rlcli prints a warning to stderr when you use `--loss gspo`.
+</Warning>
+
+<Note>
+  The only built-in dataset choice for `rlcli train rl` today is `gsm8k`. Use `--eval-every N` to run periodic evaluation during training.
+</Note>
+
+## Next steps
+
+- See the full [Backends & Losses](/concepts/backends-and-losses) compatibility matrix
+- Try [Harbor Agent RL](/guides/harbor-agent-rl) for sandboxed agent tasks
+- Review all [`train rl` CLI options](/cli/train)

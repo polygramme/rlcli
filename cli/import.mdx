@@ -1,0 +1,87 @@
+---
+title: "rlcli import: normalize chat dumps to messages JSONL"
+sidebarTitle: "import"
+description: "Convert OpenAI, Anthropic, and messages JSONL chat dumps into a standardized messages JSONL format for rlcli training."
+---
+
+rlcli reads chat dumps from various sources and normalizes them into a single messages JSONL format that `train sl` expects. Use `rlcli import` to flatten content blocks, normalize roles, filter short threads, and pipe the results directly into training.
+
+## Usage
+
+```bash
+rlcli import <INPUT_FILE> [OPTIONS]
+```
+
+## Positional argument
+
+<ParamField path="INPUT_FILE" type="string" required>
+  Path to the input file, or `-` to read from stdin.
+</ParamField>
+
+## Flags
+
+<ParamField path="--format, -f" default="messages" type="choice">
+  Input format.
+
+  - `messages`: `{"messages": [...]}` per line (default).
+  - `openai`: chat-completions dumps. Tool-calls turns are dropped.
+  - `anthropic`: Messages API dumps. Content blocks are flattened into plain text; `tool_use`, `tool_result`, `image`, and `thinking` blocks are dropped. Top-level `system` is kept as a system message.
+</ParamField>
+
+<ParamField path="--out, -o" default="-" type="string">
+  Output path, or `-` for stdout (default).
+</ParamField>
+
+<ParamField path="--min-messages" default="2" type="int">
+  Minimum number of messages a conversation must contain to be kept.
+</ParamField>
+
+<ParamField path="--limit" type="int">
+  Maximum number of conversations to output.
+</ParamField>
+
+## Role normalization
+
+rlcli normalizes roles as follows:
+
+- `human` → `user`
+- `ai` / `model` → `assistant`
+- `system` → `system`
+- `tool`, `function`, `tool_result` → dropped
+
+## Content flattening
+
+- Plain strings are kept as-is.
+- Anthropic-style content blocks: only `type: "text"` blocks are kept and joined with newlines. All other block types are dropped.
+
+## Validation
+
+A conversation is kept only when it has at least `--min-messages` messages and at least one `assistant` message after normalization.
+
+## Errors
+
+- `ImportFormatError` is raised with a line number on malformed JSON or unknown format strings.
+- If no usable conversations are found, the command exits with code `1`.
+
+## Output
+
+The command writes the normalized JSONL to stdout or `--out` and prints a count to stderr:
+
+```text
+Wrote 420 conversations (openai → messages JSONL)
+```
+
+## Examples
+
+Convert an OpenAI chat-completions dump to a local file:
+
+```bash
+rlcli import prod.jsonl -f openai -o clean.jsonl
+```
+
+Pipe imported Anthropic traces straight into supervised fine-tuning:
+
+```bash
+rlcli import prod.jsonl -f anthropic | \
+  rlcli train sl --dataset - --model Qwen/Qwen3-4B-Instruct-2507
+```

@@ -1,0 +1,96 @@
+---
+title: "Install rlcli and set up your training environment"
+sidebarTitle: "Installation"
+description: "Install rlcli with base or train extras, set up uv and Docker, and configure environment variables for local GPU training."
+---
+
+rlcli requires Python 3.11 or later. This page covers installing the package, choosing the right extras for your workflow, and preparing the tools and environment that `rlcli serve` and `rlcli train` depend on.
+
+## Install rlcli
+
+### Base install
+
+The base package includes the CLI framework, HTTP client, and Tinker SDK client:
+
+<CodeGroup>
+
+```bash pip
+pip install rlcli
+```
+
+```bash uv
+uv pip install rlcli
+```
+
+</CodeGroup>
+
+Base dependencies: `click>=8.1`, `httpx>=0.27`, `tinker==0.25.0`.
+
+### With training extras
+
+To enable `rlcli train` and `rlcli serve`, install with the `[train]` extras. This pulls the pinned `tinker-cookbook` commit, plus `sympy`, `pylatexenc`, `math-verify`, and `modal`:
+
+<CodeGroup>
+
+```bash pip
+pip install "rlcli[train]"
+```
+
+```bash uv
+uv pip install "rlcli[train]"
+```
+
+</CodeGroup>
+
+### Development extras
+
+For running tests locally, add `[dev]`:
+
+```bash
+pip install "rlcli[dev]"
+```
+
+This installs `pytest>=8`.
+
+## Required tools
+
+### uv
+
+`rlcli serve` requires `uv` because SkyRL's engine relaunch mechanism only accepts servers started with `uv run`. See [Architecture](/concepts/architecture) for why this matters. Install `uv` from [https://docs.astral.sh/uv/getting-started/installation/](https://docs.astral.sh/uv/getting-started/installation/).
+
+### Docker
+
+`rlcli train harbor` uses Docker as the default sandbox (`--sandbox docker`). Install Docker and ensure your user can run containers. If you prefer Modal, install your Modal credentials separately; the Modal SDK is already bundled with `[train]`.
+
+## Platform and backend requirements
+
+| Backend | Platform | GPU requirement | Fused RL losses |
+| --- | --- | --- | --- |
+| `jax` | Any (Linux, macOS, CPU) | None | `cross_entropy`, `importance_sampling`, `ppo`, `cispo` |
+| `fsdp` | Linux only | CUDA required | All losses including `gspo`, `dppo`, `ppo_critic` |
+| `megatron` | Linux only | CUDA required | All losses including `gspo`, `dppo`, `ppo_critic` |
+
+Choose `jax` if you are on macOS or do not have CUDA. Choose `fsdp` or `megatron` for full fused-loss training on Linux with NVIDIA GPUs.
+
+## Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `RLCLI_HOME` | Overrides `~/.rlcli` for state, logs, and the SkyRL source checkout. |
+| `RLCLI_SKYRL_SOURCE` | Points to an existing SkyRL checkout instead of letting rlcli manage `~/.rlcli/skyrl-src`. |
+| `RLCLI_TOKENIZER` | Overrides the tokenizer used by `rlcli sample` when sampling from a checkpoint. |
+
+## Verify the installation
+
+After installing, confirm the CLI is available:
+
+```bash
+rlcli version
+```
+
+You should see the installed version printed. If you installed `[train]`, you can also verify:
+
+```bash
+rlcli serve --help
+rlcli train --help
+```

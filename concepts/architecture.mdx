@@ -1,0 +1,53 @@
+---
+title: "How rlcli, SkyRL, and the Tinker SDK fit together"
+sidebarTitle: "Architecture"
+description: "Learn how rlcli orchestrates the Tinker 0.25.0 client, a local SkyRL server, and pinned cookbook recipes for private post-training on your own GPUs."
+---
+
+rlcli is a thin Python CLI that wires together three layers: your local shell, a managed SkyRL Tinker server, and the official Tinker SDK. Understanding this stack helps you debug startup issues, choose the right backend, and keep your data on your own hardware.
+
+## Three-layer stack
+
+<Steps>
+  <Step title="Client shell (rlcli)">
+    You run `rlcli serve`, `rlcli train`, and `rlcli import` from your terminal. rlcli uses `tinker==0.25.0` as its SDK dependency. It sets `TINKER_BASE_URL` and `TINKER_API_KEY=tml-dummy`, then calls cookbook recipes as plain Python functions (not shell commands).
+  </Step>
+  <Step title="HTTP bridge">
+    The client talks to the server over HTTP. Because Tinker sends `loss_fn` as a plain protobuf string with no runtime validation, newer losses from SkyRL can cross the wire even when the client and server pin different tinker versions.
+  </Step>
+  <Step title="SkyRL Tinker server">
+    The server is a separate `uv`-managed project that pins SkyRL from source. It caps `tinker<=0.24.1`, but that does not matter: it only needs to speak the same HTTP surface. The server relaunches its own engine subprocess with `uv run ... -m skyrl.tinker.engine`, and its startup parser only accepts servers launched as `uv run ... -m skyrl.tinker.api` from the same project.
+  </Step>
+</Steps>
+
+## Why the version split exists
+
+SkyRL caps its tinker dependency at `<=0.24.1`. rlcli upgrades the client to `0.25.0` so you get the latest CLI features and bug fixes. The two versions meet over HTTP because the training request path serializes `loss_fn` as a raw string. That means rlcli can submit extended losses (like `gspo`) that the older server understands, without forcing a global version lock.
+
+## Where state lives
+
+| Path | Purpose | Override |
+| --- | --- | --- |
+| `~/.rlcli/server.json` | Managed server state (PID, port, flags) | `RLCLI_HOME` |
+| `~/.rlcli/server.log` | Server stdout / stderr | `RLCLI_HOME` |
+| `~/.rlcli/skyrl-src` | Pinned SkyRL source checkout | `RLCLI_SKYRL_SOURCE` |
+
+Set `RLCLI_HOME` to move the entire runtime directory somewhere else. Set `RLCLI_SKYRL_SOURCE` if you already have a SkyRL checkout you want rlcli to use instead of cloning its own.
+
+## How training commands run
+
+`rlcli train sl`, `rlcli train rl`, and `rlcli train harbor` do not shell out to `tinker`. They import pinned `tinker-cookbook` recipes and invoke them as chz-configured plain functions. This keeps logs, error traces, and stack frames inside rlcli, and lets rlcli validate flags (like loss/backend compatibility) before any GPU work starts.
+
+## Passthrough commands
+
+`rlcli checkpoint`, `rlcli run`, and `rlcli session` are thin wrappers around the official `tinker` CLI. They run `python -m tinker.cli <name> ...` with `TINKER_BASE_URL` pointed at your local server and `TINKER_API_KEY=tml-dummy` injected if unset. The commands and flags are identical to the upstream Tinker CLI.
+
+## Data privacy
+
+Traces you import, datasets you train on, weights produced by training, and server logs all stay in your local environment. rlcli never uploads them to a remote service. The only network traffic is HTTP between your shell and the local SkyRL server on `localhost`.
+
+## Next steps
+
+- Choose a backend and loss: [`/concepts/backends-and-losses`](/concepts/backends-and-losses)
+- Start the server: [`/cli/serve`](/cli/serve)
+- Run your first training job: [`/quickstart`](/quickstart)

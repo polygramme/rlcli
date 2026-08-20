@@ -1,0 +1,54 @@
+---
+title: "SkyRL backends and supported training losses"
+sidebarTitle: "Backends & Losses"
+description: "Compare JAX, FSDP, and Megatron backends for rlcli, see which losses each supports, and learn how rlcli guards against incompatible combinations before training starts."
+---
+
+rlcli delegates training to a local SkyRL server, and SkyRL offers three backends: JAX, FSDP, and Megatron. Each backend supports a different set of losses, runs on different hardware, and accepts different `rlcli serve start` flags. Picking the right pair prevents runtime errors and avoids unnecessary GPU setup.
+
+## Backend × loss support matrix
+
+| Loss | JAX | FSDP | Megatron |
+| --- | --- | --- | --- |
+| `cross_entropy` | Yes | Yes | Yes |
+| `importance_sampling` | Yes | Yes | Yes |
+| `ppo` | Yes | Yes | Yes |
+| `cispo` | Yes | Yes | Yes |
+| `gspo` | No | Yes | Yes |
+| `dppo` | No | Yes | Yes |
+| `ppo_critic` | No | Yes | Yes |
+
+JAX supports the four core losses. FSDP and Megatron support all seven, including the three torch-only losses: `gspo`, `dppo`, and `ppo_critic`.
+
+<Note>
+  Hosted Tinker (the SDK Literal cloud endpoint) serves `cross_entropy`, `importance_sampling`, `ppo`, `cispo`, and `dro`. rlcli's local server exposes the additional torch-only losses above.
+</Note>
+
+## Hardware and environment requirements
+
+- **JAX**: runs anywhere, including CPU and macOS. This is the fastest way to test rlcli without a Linux CUDA box.
+- **FSDP / Megatron**: require Linux with CUDA. Use these when you want the full loss set and multi-node scaling.
+
+Because torch backends need CUDA, flags like `--gpus`, `--nodes`, and `--tp` (tensor parallelism) only apply to FSDP and Megatron. Passing them with `--backend jax` is a usage error.
+
+## Context length cap
+
+`rlcli serve start` defaults `--max-model-len` to `16384`. Some models, such as Qwen3-4B-Instruct-2507, advertise a 262K native context window, and uncapped vLLM buffer sizing can segfault during initialization. Set `--max-model-len 0` to disable the cap and use the model's native limit.
+
+## Loss guard
+
+Before any training starts, rlcli calls `ensure_loss_supported(loss, backend)`. If you request a torch-only loss (for example `gspo`) against a JAX server, it fails fast with a clear `LossBackendError` that names the incompatible pair. When rlcli does not manage the server (for example, you pointed `--base-url` at a remote endpoint), the guard only rejects entirely unknown losses.
+
+## Known gspo issue on multi-GPU Megatron
+
+<Warning>
+  `gspo` has a known upstream packing-order bug on multi-GPU and Megatron data-parallel configs (NovaSky-AI/SkyRL#2043). Single-GPU FSDP is verified clean. rlcli prints a warning to stderr whenever you run `rlcli train rl --loss gspo` or `rlcli train harbor --loss gspo`.
+</Warning>
+
+If you need `gspo` today, start the server with `--backend fsdp --gpus 1` to stay on the verified path.
+
+## Next steps
+
+- Start the server with the right backend: [`/cli/serve`](/cli/serve)
+- Run RL training and pick a loss: [`/guides/reinforcement-learning`](/guides/reinforcement-learning)
+- See the full architecture: [`/concepts/architecture`](/concepts/architecture)

@@ -1,0 +1,92 @@
+---
+title: "Quickstart: fine-tune a model on your GPUs"
+sidebarTitle: "Quickstart"
+description: "Get rlcli installed, start a local SkyRL server, and run your first supervised fine-tuning job on your own GPUs in minutes."
+---
+
+This guide takes you from a fresh environment to a completed supervised fine-tuning run with rlcli. You will install the CLI, start a local SkyRL Tinker server, prepare a dataset, run training, and sample from the resulting checkpoint.
+
+<Steps>
+  <Step title="Install rlcli">
+    Install rlcli with the `[train]` extras so the `train` and `serve` commands are available. You can use `pip` or `uv`:
+
+    <CodeGroup>
+
+    ```bash pip
+    pip install "rlcli[train]"
+    ```
+
+    ```bash uv
+    uv pip install "rlcli[train]"
+    ```
+
+    </CodeGroup>
+
+    You need Python 3.11 or later and `uv` installed for `rlcli serve` to work. See [Installation](/installation) for full details.
+  </Step>
+  <Step title="Start the local server">
+    Start a SkyRL Tinker server on your local GPUs. This example uses the FSDP backend with 8 GPUs:
+
+    ```bash
+    rlcli serve start --base-model Qwen/Qwen3-4B-Instruct-2507 --backend fsdp --gpus 8
+    ```
+
+    <Tip>
+      If you do not have CUDA or you are on macOS, use `--backend jax` instead. JAX runs on CPU and macOS, but it does not serve fused losses such as GSPO or DPPO. See [Backends & Losses](/concepts/backends-and-losses) for the full matrix.
+    </Tip>
+
+    The command blocks until the server is ready (default timeout is 900 seconds). Once it returns, the server is running in the background.
+  </Step>
+  <Step title="Check server health">
+    Verify the server is healthy before you submit training jobs:
+
+    ```bash
+    rlcli serve status
+    ```
+
+    You should see a JSON object that includes `"healthy": true`.
+  </Step>
+  <Step title="Prepare a dataset">
+    Create a JSONL file where each line is an object with a `messages` array. For details, see [Dataset Format](/concepts/dataset-format).
+
+    ```json conversations.jsonl
+    {"messages": [{"role": "user", "content": "What is 2+2?"}, {"role": "assistant", "content": "4"}]}
+    {"messages": [{"role": "user", "content": "Explain recursion."}, {"role": "assistant", "content": "Recursion is when a function calls itself."}]}
+    ```
+  </Step>
+  <Step title="Run supervised fine-tuning">
+    Train with the default SFT settings:
+
+    ```bash
+    rlcli train sl --model Qwen/Qwen3-4B-Instruct-2507 --dataset conversations.jsonl
+    ```
+
+    By default, logs are written to `~/.rlcli/runs/sl-<timestamp>/`. The run uses LoRA rank 32, batch size 8, learning rate 1e-4, and max length 2048.
+  </Step>
+  <Step title="Sample from the checkpoint">
+    After training saves checkpoints, list them and sample:
+
+    ```bash
+    rlcli checkpoint list
+    rlcli sample --prompt "What is 5+7?" --checkpoint tinker://<checkpoint-path>
+    ```
+
+    You can also sample from the base model directly with `--model` instead of `--checkpoint`.
+  </Step>
+</Steps>
+
+## Next steps
+
+<CardGroup cols={3}>
+  <Card title="RL Training" icon="rotate" href="/guides/reinforcement-learning">
+    Move from SFT to RL with PPO, GSPO, or CISPO on GSM8K.
+  </Card>
+
+  <Card title="Harbor Agent RL" icon="ship" href="/guides/harbor-agent-rl">
+    Train agentic models with Harbor tasks in a sandboxed environment.
+  </Card>
+
+  <Card title="CLI Overview" icon="terminal" href="/cli/overview">
+    Explore all commands, flags, and passthrough behavior.
+  </Card>
+</CardGroup>

@@ -1,0 +1,104 @@
+---
+title: "Agent RL on Harbor tasks in local Docker sandboxes"
+sidebarTitle: "Harbor Agent RL"
+description: "Run reinforcement learning on Harbor terminal tasks with rlcli train harbor. Uses local Docker sandboxes by default, with optional Modal cloud execution."
+---
+
+rlcli `train harbor` runs reinforcement learning on Harbor terminal tasks, rewarding agents based on `tests/test.sh` results. By default, it uses local Docker sandboxes, so you do not need a cloud account. This guide covers setup, dataset prefetching, task filtering, and launching a training run.
+
+## Prerequisites
+
+- Docker daemon running locally
+- A torch backend server for fused losses (see [Backends & Losses](/concepts/backends-and-losses))
+- For cloud sandboxes: a Modal account and the Modal CLI configured
+
+## Step-by-step
+
+<Steps>
+  <Step title="Start the server">
+    Launch SkyRL with a torch backend. FSDP on a single GPU is recommended for stability with fused losses:
+
+    ```bash
+    rlcli serve start --base-model Qwen/Qwen3-4B-Instruct-2507 --backend fsdp --gpus 1
+    ```
+  </Step>
+  <Step title="Prefetch the dataset (optional)">
+    The default dataset is `terminal-bench@2.0`. rlcli auto-downloads it on first use via `uvx harbor datasets download`, but you can prefetch it manually:
+
+    ```bash
+    uvx harbor datasets download terminal-bench@2.0 -o ~/.cache/harbor/tasks/terminal-bench@2.0
+    ```
+  </Step>
+  <Step title="Filter tasks">
+    Narrow the task set with substring filtering and a limit:
+
+    ```bash
+    rlcli train harbor \
+      --model Qwen/Qwen3-4B-Instruct-2507 \
+      --task-filter grep \
+      --limit 50 \
+      --dry-run
+    ```
+
+    If no tasks match your filter, rlcli exits with a clear usage error.
+  </Step>
+  <Step title="Preview the config">
+    Verify your setup before consuming GPU time:
+
+    ```bash
+    rlcli train harbor \
+      --model Qwen/Qwen3-4B-Instruct-2507 \
+      --loss gspo \
+      --group-size 4 \
+      --groups-per-batch 4 \
+      --lr 1e-5 \
+      --max-tokens 4096 \
+      --max-turns 10 \
+      --sandbox-timeout 3600 \
+      --command-timeout 120 \
+      --save-every 5 \
+      --dry-run
+    ```
+  </Step>
+  <Step title="Run Harbor agent RL">
+    Remove `--dry-run` to start training:
+
+    ```bash
+    rlcli train harbor \
+      --model Qwen/Qwen3-4B-Instruct-2507 \
+      --loss gspo \
+      --group-size 4 \
+      --groups-per-batch 4 \
+      --lr 1e-5 \
+      --max-tokens 4096 \
+      --max-turns 10 \
+      --sandbox-timeout 3600 \
+      --command-timeout 120 \
+      --save-every 5
+    ```
+
+    Training logs are written to `~/.rlcli/runs/harbor-<timestamp>` by default.
+  </Step>
+</Steps>
+
+## Sandbox options
+
+<CardGroup cols={2}>
+  <Card title="Docker (default)" icon="docker">
+    Runs tasks in local Docker containers. No cloud account required. Ensure your Docker daemon is running.
+  </Card>
+
+  <Card title="Modal" icon="cloud">
+    Runs tasks in Modal cloud sandboxes. Pass `--sandbox modal` if you have Modal configured.
+  </Card>
+</CardGroup>
+
+## Tokenizer stability
+
+rlcli installs a locked tokenizer to avoid "Already borrowed" panics that can occur when concurrent Harbor environments render with a shared fast tokenizer.
+
+## Next steps
+
+- Review all [`train harbor` CLI options](/cli/train)
+- Learn about [Backends & Losses](/concepts/backends-and-losses)
+- Explore [supervised fine-tuning](/guides/supervised-fine-tuning) to distill agent traces
