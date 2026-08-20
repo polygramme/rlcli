@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  unit:
+    # Core CLI, importers, and the tinker wire-compat tests. Cookbook-dependent
+    # test files skip themselves via importorskip.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv venv -p 3.12 && uv pip install -e ".[dev]"
+      - run: .venv/bin/python -m pytest -q
+
+  integration:
+    # Full suite: cookbook recipes (train dry-run paths), LocalDockerSandbox
+    # against the runner's real Docker daemon.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+      - run: uv venv -p 3.12 && uv pip install -e ".[dev,train]"
+      - run: .venv/bin/python -m pytest -q
