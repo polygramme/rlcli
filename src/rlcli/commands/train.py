@@ -38,16 +38,17 @@ def _default_log_path(kind: str) -> str:
 
 
 def _warn_known_upstream_issues(loss: str) -> None:
-    # Native gspo at the pinned skyrl can return logprobs in packed (not input)
-    # order for variable-length microbatches, failing with an IndexError in the
-    # KL/metrics path before the first update. Fix pending upstream:
-    # https://github.com/NovaSky-AI/SkyRL/pull/2043 — remove this when it merges
-    # and the pin is bumped.
+    # Native gspo at the pinned skyrl can return logprobs in packed (not
+    # input) order, failing with an IndexError in the KL/metrics path. Fix
+    # pending upstream: https://github.com/NovaSky-AI/SkyRL/pull/2043.
+    # Verified clean on single-GPU FSDP with variable-length batches
+    # (2026-08-19 Modal L4 probe); the reported failures are multi-GPU
+    # Megatron DP configs. Remove when #2043 merges and the pin is bumped.
     if loss == "gspo":
         click.echo(
-            "note: native gspo has a known upstream ordering bug with variable-length "
-            "batches at the pinned SkyRL (NovaSky-AI/SkyRL#2043, fix in review). "
-            "Verify the first update completes; importance_sampling/ppo are unaffected.",
+            "note: on multi-GPU/Megatron servers, native gspo at the pinned SkyRL "
+            "has a known packing-order bug (NovaSky-AI/SkyRL#2043, fix in review) — "
+            "verify the first update completes. Single-GPU FSDP is verified clean.",
             err=True,
         )
 
