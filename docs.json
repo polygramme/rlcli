@@ -1,6 +1,6 @@
 {
   "theme": "aspen",
-  "name": "rlcli- interface for continual learning",
+  "name": "rlcli",
   "colors": {
     "primary": "#2E7D5B",
     "light": "#5FB98A",
