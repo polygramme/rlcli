@@ -30,7 +30,13 @@ Docs: [docs.polygramme.com](https://docs.polygramme.com) · Install: `pip instal
 Measured, with receipts in [`benchmarks/`](benchmarks/):
 
 - **Fused GSPO vs 2-pass** ([json](benchmarks/last_gspo_bench.json)): same A100, same frozen batch — 12.9s vs 16.8s per step (−23%), 586 vs 451 tok/s (+29.8%).
+
+![Fused 1-pass GSPO vs 2-pass custom loss: 23% faster steps, 29.8% higher throughput](benchmarks/bench_gspo_bars.png)
+
 - **GSM8K end-to-end** ([json](benchmarks/row1_gsm8k.json)): Qwen3-4B-Instruct-2507, 25 GSPO steps — 85.29% → 87.11% on the full 1,319-problem test set, for $3.52 of rented A100 time.
+- **Cold start on a single L4**: Qwen3-0.6B goes from ~2% to ~60%+ GSM8K train accuracy in 40 GSPO steps.
+
+![Qwen3-0.6B GSM8K train accuracy climbing from ~2% to 60%+ over 40 GSPO steps on one L4](benchmarks/curve_gsm8k_gspo.png)
 
 ## How it works
 
