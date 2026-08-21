@@ -1,6 +1,6 @@
 [project]
 name = "polygramme-rlcli"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "One-shot CLI for Tinker-API post-training on your own GPUs (SkyRL backend): serve, train, and fused RL losses like forward_backward('gspo') in a single command."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,9 +14,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Training drives tinker-cookbook recipes. Pinned to a commit — never @nightly.
+# Training drives tinker-cookbook recipes, pinned to a commit. PyPI forbids
+# direct-URL dependencies, so the cookbook itself installs separately — the
+# train commands print the exact pinned requirement if it is missing
+# (COOKBOOK_REQUIREMENT in commands/train.py; keep the two pins in sync).
 train = [
-    "tinker-cookbook @ git+https://github.com/thinking-machines-lab/tinker-cookbook@f46eddde86e5397138917516a6c69d2ecbf538b1",
     # math_rl recipe (gsm8k env for `train rl`) hard-requires these at import.
     "sympy",
     "pylatexenc",

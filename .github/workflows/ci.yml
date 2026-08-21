@@ -24,5 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
-      - run: uv venv -p 3.12 && uv pip install -e ".[dev,train]"
+      # Cookbook is a direct-URL pin, which PyPI forbids inside the [train]
+      # extra — install it explicitly (same pin as COOKBOOK_REQUIREMENT).
+      - run: uv venv -p 3.12 && uv pip install -e ".[dev,train]" "tinker-cookbook @ git+https://github.com/thinking-machines-lab/tinker-cookbook@f46eddde86e5397138917516a6c69d2ecbf538b1"
       - run: .venv/bin/python -m pytest -q
