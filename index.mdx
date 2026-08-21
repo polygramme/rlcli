@@ -1,14 +1,28 @@
 ---
 title: "rlcli - A CLI Interface for continual learning"
 sidebarTitle: "Introduction"
-description: "rlcli is a Python CLI for one-shot Tinker-API post-training on your own GPUs, backed by SkyRL. Install, serve, train, and sample locally."
+description: "rlcli runs fused GSPO on your own GPUs in one forward-backward call, the loss hosted Tinker does not serve. Backed by SkyRL, driven from your terminal."
 ---
 
-rlcli is a Python CLI that gives you one-shot Tinker-API post-training on your own GPUs, backed by SkyRL. The Tinker API separates training logic from infrastructure, and SkyRL implements that API locally with fused RL losses. The official `tinker` CLI has no `train` verb, and SkyRL has no CLI: rlcli is the missing front door that wires them together so you can serve a model, run SFT or RL, and sample from checkpoints without leaving your terminal.
+rlcli is a Python CLI that runs fused RL losses like **GSPO** on your own GPUs in a single `forward_backward` call, backed by SkyRL. Hosted Tinker does not serve GSPO natively: reproducing it there costs a 2-pass round-trip (fetch logprobs, compute the loss client-side, ship the reweighted batch back). rlcli gives you the fused 1-pass path locally, and [our benchmark](/concepts/benchmarks) measures a **23% step-time reduction and 29.8% throughput gain** on Qwen3-4B-Instruct-2507.
+
+It is also the missing front door for the whole stack: the official `tinker` CLI has no `train` verb, and SkyRL has no CLI. rlcli wires them together so you can serve a model, run SFT or RL, and sample from checkpoints without leaving your terminal.
 
 <Note>
   This package is `rlcli` on PyPI. Do not confuse it with `rl-cli` (Runloop's CLI), which is a different tool.
 </Note>
+
+## Why fused GSPO
+
+<CardGroup cols={2}>
+  <Card title="1-pass vs 2-pass" icon="gauge-high" href="/concepts/benchmarks">
+    23% faster step time and 29.8% higher throughput than the round-trip pattern.
+  </Card>
+
+  <Card title="Full loss set" icon="layer-group" href="/concepts/backends-and-losses">
+    GSPO, DPPO, PPO-Critic, CISPO, PPO, and importance sampling on FSDP or Megatron.
+  </Card>
+</CardGroup>
 
 ## Get started
 
