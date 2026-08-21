@@ -1,0 +1,25 @@
+{
+  "name": "gsm8k-qwen3-4b-gspo",
+  "date": "2026-08-20",
+  "model": "Qwen/Qwen3-4B-Instruct-2507",
+  "task": "GSM8K (tinker-cookbook math_rl recipe)",
+  "hardware": "1x A100-80GB (rented, Modal)",
+  "server": "rlcli serve --backend fsdp (SkyRL Tinker engine, vLLM sampling, LoRA)",
+  "train_command": "rlcli train rl --loss gspo --model Qwen/Qwen3-4B-Instruct-2507 --batch-size 8 --group-size 8 --max-tokens 384 --eval-every 25",
+  "eval": {
+    "dataset": "GSM8K test split, full 1319 problems",
+    "baseline_accuracy": 0.852919,
+    "step_25_accuracy": 0.871114
+  },
+  "training_progress": {
+    "steps_completed": 49,
+    "train_batch_accuracy_range_at_end": [0.8125, 1.0],
+    "note": "Run ended at step 49 when the cloud GPU container was preempted; both eval numbers above are full-test-set evaluations from before the preemption."
+  },
+  "cost": {
+    "gpu_hours": 1.41,
+    "rate_usd_per_hour": 2.50,
+    "total_usd": 3.52,
+    "note": "Wall-clock A100 rental including server boot, both full-test evals, and the preemption. No per-token charges; weights stay with the user."
+  }
+}
