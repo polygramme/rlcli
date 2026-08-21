@@ -20,6 +20,23 @@ from rlcli.server import backend_for_url
 
 DEFAULT_BASE_URL = "http://localhost:8000"
 
+# PyPI forbids direct-URL dependencies, so the pinned cookbook cannot ship in
+# the [train] extra — it is installed separately with this exact requirement.
+COOKBOOK_REQUIREMENT = (
+    "tinker-cookbook @ git+https://github.com/thinking-machines-lab/"
+    "tinker-cookbook@f46eddde86e5397138917516a6c69d2ecbf538b1"
+)
+
+
+def _require_cookbook() -> None:
+    try:
+        import tinker_cookbook  # noqa: F401
+    except ModuleNotFoundError:
+        raise click.ClickException(
+            "train commands need tinker-cookbook (pinned) and the [train] extra:\n"
+            f'  pip install "polygramme-rlcli[train]" "{COOKBOOK_REQUIREMENT}"'
+        )
+
 
 def _prepare_env(base_url: str) -> None:
     # Local SkyRL servers ignore the key but the SDK requires one to be set.
@@ -110,6 +127,7 @@ def _materialize_dataset(dataset_path: str) -> str:
 def sl(dataset_path, model_name, base_url, renderer_name, batch_size, learning_rate,
        max_length, num_epochs, lora_rank, save_every, test_size, log_path, dry_run):
     """Supervised fine-tuning on a messages-JSONL dataset."""
+    _require_cookbook()
     dataset_path = _materialize_dataset(dataset_path)
     _prepare_env(base_url)
     from tinker_cookbook.supervised import train as sl_train
@@ -172,6 +190,7 @@ def rl(model_name, base_url, loss, loss_config, backend_hint, dataset, renderer_
        batch_size, group_size, learning_rate, max_tokens, lora_rank, save_every,
        eval_every, max_steps, log_path, dry_run):
     """RL on a built-in environment, with the full SkyRL loss set."""
+    _require_cookbook()
     backend = backend_hint or backend_for_url(base_url)
     ensure_loss_supported(loss, backend)
     _warn_known_upstream_issues(loss)
@@ -248,6 +267,7 @@ def harbor(model_name, base_url, loss, loss_config, backend_hint, dataset, sandb
            learning_rate, max_tokens, max_turns, lora_rank, save_every, eval_every,
            max_steps, sandbox_timeout, command_timeout, log_path, dry_run):
     """RL on Harbor tasks in local Docker sandboxes, reward from tests/test.sh."""
+    _require_cookbook()
     backend = backend_hint or backend_for_url(base_url)
     ensure_loss_supported(loss, backend)
     _warn_known_upstream_issues(loss)

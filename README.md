@@ -66,7 +66,7 @@ an environment and reward (see roadmap).
 ```bash
 uv venv && uv pip install -e ".[dev]"
 pytest                       # includes the wire-compat test for extended losses
-uv pip install -e ".[train]" # cookbook (pinned) for the train commands
+uv pip install -e ".[train]" "tinker-cookbook @ git+https://github.com/thinking-machines-lab/tinker-cookbook@f46eddde86e5397138917516a6c69d2ecbf538b1"  # train commands (PyPI forbids the git pin inside the extra)
 ```
 
 Policy: tinker and tinker-cookbook are pinned dependencies; we do not carry patches against them — compatibility lives in `rlcli/compat.py` and is re-verified by tests on every pin bump.
