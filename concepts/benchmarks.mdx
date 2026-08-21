@@ -65,6 +65,21 @@ Measured on `Qwen/Qwen3-4B-Instruct-2507` with `--lora-rank 32`, 16 sequences, 7
   </Step>
 </Steps>
 
+## End-to-end learning: GSM8K with fused GSPO
+
+Beyond wall-clock speed, fused GSPO on rlcli produces real learning on a single L4 GPU. The plot below is `rlcli train rl --loss gspo` on Qwen3-0.6B against GSM8K, GSM8K train accuracy per step.
+
+Render both plots (bars and curve) from your own runs with `benchmarks/plot_assets.py`:
+
+```bash
+python benchmarks/plot_assets.py \
+  --run-dir ~/.rlcli/runs/rl-<timestamp> \
+  --bench benchmarks/last_gspo_bench.json \
+  --out benchmarks/
+```
+
+It reads `metrics.jsonl` from the run directory (uses `env/all/correct` for the reward curve) and writes `bench_gspo_bars.png` plus `curve_gsm8k_gspo.png`.
+
 <Tip>
   Single-GPU FSDP is verified clean for fused GSPO. Multi-GPU Megatron DP configs currently hit an upstream packing-order bug (see [Backends & Losses](/concepts/backends-and-losses)).
 </Tip>
