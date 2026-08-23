@@ -59,11 +59,27 @@ One JSON object per line:
 {"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]}
 ```
 
-`rlcli import` produces this from common chat dumps: `-f openai` (chat-completions
-dumps; tool-call turns dropped), `-f anthropic` (Messages API dumps; content blocks
-flattened, top-level `system` kept), `-f messages` (already-shaped, roles normalized
-— `human`→`user`, `ai`→`assistant`), `-f langsmith` (LangSmith run exports; feedback
-scores become a `reward` field, `--min-score` keeps only verified traces).
+`rlcli import` produces this from common chat dumps: `-f openai`, `-f anthropic`
+(content blocks incl. tool_use/tool_result), `-f messages` (roles normalized —
+`human`→`user`, `ai`→`assistant`), `-f langsmith` (run exports; feedback scores
+become a `reward` field, `--min-score` keeps only verified traces; or pull live
+with `--project`, needs `pip install "polygramme-rlcli[langsmith]"`), `-f csv`
+(one exchange per row), `-f vercel` (AI SDK `parts` messages).
+
+**Tool calls are preserved by default** — assistant `tool_calls` and
+`role: "tool"` results survive import in the exact shape the renderers train
+on, so your agent's tool use is trainable, not stripped (`--drop-tools` for
+text-only). **Telemetry as reward**: `--telemetry events.jsonl` joins product
+events (`{"trace_id", "score"}` — thumbs-up, conversion, escalation) onto
+conversations by caller-owned trace_id. **PII redaction** before anything is
+written: `--redact email --redact api_key` (or `all`), plus custom
+`--redact-pattern name=regex` — applied to message content and tool-call
+arguments.
+
+**Live capture**: `rlcli capture --upstream https://api.openai.com/v1 --out
+traces.jsonl` runs a transparent OpenAI-compatible proxy — point your agent's
+base_url at it and every completion (streaming included, tool calls included)
+lands in an import-ready trace file.
 
 ## Trace → environment synthesis (`synth`)
 

@@ -342,6 +342,33 @@ _PARSERS = {
     "vercel": _parse_vercel_line,
 }
 
+def iter_langsmith_project(
+    project: str, limit: int | None = None
+) -> Iterator[str]:
+    """Live pull: root runs of a LangSmith project as JSON lines, ready for
+    the langsmith parser. Needs the `langsmith` package and LANGSMITH_API_KEY.
+    """
+    try:
+        from langsmith import Client
+    except ModuleNotFoundError as e:
+        raise ImportFormatError(
+            "--project needs the langsmith SDK: pip install langsmith "
+            "(and set LANGSMITH_API_KEY)"
+        ) from e
+    client = Client()
+    for run in client.list_runs(project_name=project, is_root=True, limit=limit):
+        record = {
+            "id": str(run.id),
+            "trace_id": str(getattr(run, "trace_id", "") or run.id),
+            "inputs": run.inputs or {},
+            "outputs": run.outputs or {},
+        }
+        stats = getattr(run, "feedback_stats", None)
+        if stats:
+            record["feedback_stats"] = stats
+        yield json.dumps(record, default=str)
+
+
 # CSV column names recognized by iter_csv_conversations, in lookup order.
 _CSV_ROLE_COLUMNS = (("user", "assistant"), ("prompt", "completion"),
                      ("input", "output"), ("question", "answer"))

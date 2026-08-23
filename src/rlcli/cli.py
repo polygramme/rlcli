@@ -8,6 +8,7 @@ import sys
 import click
 
 LAZY_SUBCOMMANDS = {
+    "capture": "rlcli.commands.capture_cmd:cli",
     "import": "rlcli.commands.import_cmd:cli",
     "serve": "rlcli.commands.serve:cli",
     "train": "rlcli.commands.train:cli",

@@ -13,13 +13,23 @@ import sys
 
 import click
 
-from rlcli.importers import FORMATS, ImportFormatError, iter_conversations
+from rlcli.importers import (
+    FORMATS,
+    ImportFormatError,
+    iter_conversations,
+    iter_langsmith_project,
+)
 from rlcli.redact import RedactionError, build_redactors, redact_record
 from rlcli.telemetry import TelemetryFormatError, load_telemetry
 
 
 @click.command("import")
-@click.argument("input_file", type=click.Path(exists=True, dir_okay=False, allow_dash=True))
+@click.argument("input_file", required=False,
+                type=click.Path(exists=True, dir_okay=False, allow_dash=True))
+@click.option("--project", default=None,
+              help="Pull root runs live from this LangSmith project instead of "
+                   "reading INPUT_FILE (needs `pip install langsmith` + "
+                   "LANGSMITH_API_KEY; implies -f langsmith).")
 @click.option("--format", "-f", "fmt", type=click.Choice(FORMATS), default="messages",
               show_default=True,
               help="messages: {'messages': [...]} per line. openai: chat-completions "
@@ -54,9 +64,16 @@ from rlcli.telemetry import TelemetryFormatError, load_telemetry
                    "credit_card, ipv4, api_key, or 'all'). Repeatable.")
 @click.option("--redact-pattern", "redact_custom", multiple=True,
               help="Custom redaction as name=regex. Repeatable.")
-def cli(input_file, fmt, out, min_messages, limit, drop_tools, feedback_key,
-        telemetry_file, telemetry_key, min_score, redact_names, redact_custom):
+def cli(input_file, project, fmt, out, min_messages, limit, drop_tools,
+        feedback_key, telemetry_file, telemetry_key, min_score, redact_names,
+        redact_custom):
     """Convert INPUT_FILE ('-' for stdin) to training-ready messages JSONL."""
+    if project is not None:
+        if input_file is not None:
+            raise click.UsageError("Give either INPUT_FILE or --project, not both.")
+        fmt = "langsmith"
+    elif input_file is None:
+        raise click.UsageError("Missing INPUT_FILE (or use --project).")
     if fmt != "langsmith" and feedback_key is not None:
         raise click.UsageError("--feedback-key only applies to -f langsmith")
     if min_score is not None and fmt != "langsmith" and telemetry_file is None \
@@ -76,7 +93,12 @@ def cli(input_file, fmt, out, min_messages, limit, drop_tools, feedback_key,
         except TelemetryFormatError as e:
             raise click.ClickException(str(e))
 
-    src = sys.stdin if input_file == "-" else open(input_file, "r", encoding="utf-8")
+    if project is not None:
+        src = iter_langsmith_project(project, limit=limit)
+    elif input_file == "-":
+        src = sys.stdin
+    else:
+        src = open(input_file, "r", encoding="utf-8")
     dst = sys.stdout if out == "-" else open(out, "w", encoding="utf-8")
     written = skipped_low = joined = 0
     try:

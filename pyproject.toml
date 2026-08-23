@@ -28,6 +28,8 @@ train = [
     "modal",
 ]
 dev = ["pytest>=8"]
+# Live pulls with `rlcli import --project` (file-based langsmith import needs nothing).
+langsmith = ["langsmith"]
 
 [project.scripts]
 rlcli = "rlcli.cli:main"
