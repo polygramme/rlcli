@@ -45,34 +45,124 @@ def test_messages_format_normalizes_langchain_roles():
                       {"role": "assistant", "content": "hello"}]]
 
 
-def test_openai_format_drops_tool_plumbing():
+def test_openai_format_preserves_tools_by_default():
     line = json.dumps({"messages": [
         {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "what time is it?"},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "c1", "type": "function",
+                         "function": {"name": "clock", "arguments": "{}"}}]},
+        {"role": "tool", "content": "12:00", "tool_call_id": "c1"},
+        {"role": "assistant", "content": "It's noon."},
+    ]})
+    (conv,) = _convs([line], "openai")
+    assert [m["role"] for m in conv] == ["system", "user", "assistant", "tool", "assistant"]
+    call_turn = conv[2]
+    assert call_turn["tool_calls"] == [{"id": "c1", "type": "function",
+                                        "function": {"name": "clock", "arguments": "{}"}}]
+    assert conv[3] == {"role": "tool", "content": "12:00", "tool_call_id": "c1"}
+
+
+def test_openai_format_drop_tools_flag_restores_text_only():
+    line = json.dumps({"messages": [
         {"role": "user", "content": "what time is it?"},
         {"role": "assistant", "content": None,
          "tool_calls": [{"type": "function", "function": {"name": "clock"}}]},
         {"role": "tool", "content": "12:00"},
         {"role": "assistant", "content": "It's noon."},
     ]})
-    (conv,) = _convs([line], "openai")
-    assert [m["role"] for m in conv] == ["system", "user", "assistant"]
+    (conv,) = _convs([line], "openai", preserve_tools=False)
+    assert [m["role"] for m in conv] == ["user", "assistant"]
     assert conv[-1]["content"] == "It's noon."
 
 
-def test_anthropic_format_flattens_blocks_and_system():
+def test_anthropic_format_tool_use_and_result_blocks():
     line = json.dumps({
         "system": "you are terse",
         "messages": [
             {"role": "user", "content": [{"type": "text", "text": "2+2?"}]},
             {"role": "assistant", "content": [
-                {"type": "text", "text": "4"},
-                {"type": "tool_use", "name": "calc", "input": {}},
+                {"type": "text", "text": "let me check"},
+                {"type": "tool_use", "id": "tu1", "name": "calc",
+                 "input": {"expr": "2+2"}},
             ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "tu1", "content": "4"},
+            ]},
+            {"role": "assistant", "content": [{"type": "text", "text": "4"}]},
         ],
     })
     (conv,) = _convs([line], "anthropic")
     assert conv[0] == {"role": "system", "content": "you are terse"}
-    assert conv[-1] == {"role": "assistant", "content": "4"}
+    assert [m["role"] for m in conv] == ["system", "user", "assistant", "tool", "assistant"]
+    tc = conv[2]["tool_calls"][0]
+    assert tc["id"] == "tu1" and tc["function"]["name"] == "calc"
+    assert json.loads(tc["function"]["arguments"]) == {"expr": "2+2"}
+    assert conv[3] == {"role": "tool", "content": "4", "tool_call_id": "tu1"}
+
+
+def test_vercel_format_flattens_parts():
+    line = json.dumps({"messages": [
+        {"role": "user", "parts": [{"type": "text", "text": "hi"},
+                                   {"type": "step-start"}]},
+        {"role": "assistant", "parts": [{"type": "text", "text": "hello"}]},
+    ]})
+    (conv,) = _convs([line], "vercel")
+    assert conv == [{"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "hello"}]
+
+
+def test_csv_format_column_pairs_and_reward(tmp_path):
+    src = tmp_path / "data.csv"
+    src.write_text('system,user,assistant,reward\n'
+                   'be terse,"2+2?","4",1.0\n'
+                   ',"skip me","",0.5\n')
+    result = CliRunner().invoke(main_cli, ["import", str(src), "-f", "csv"])
+    assert result.exit_code == 0, result.output
+    row = json.loads(next(l for l in result.output.splitlines() if l.startswith("{")))
+    assert row["messages"][0] == {"role": "system", "content": "be terse"}
+    assert row["messages"][-1] == {"role": "assistant", "content": "4"}
+    assert row["reward"] == 1.0
+
+
+def test_telemetry_join_and_min_score(tmp_path):
+    src = tmp_path / "convs.jsonl"
+    src.write_text("\n".join([
+        json.dumps({"trace_id": "t1", "messages": [
+            {"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]}),
+        json.dumps({"trace_id": "t2", "messages": [
+            {"role": "user", "content": "c"}, {"role": "assistant", "content": "d"}]}),
+    ]) + "\n")
+    events = tmp_path / "events.jsonl"
+    events.write_text("\n".join([
+        json.dumps({"trace_id": "t1", "key": "thumbs", "score": 1}),
+        json.dumps({"trace_id": "t1", "key": "thumbs", "score": 0}),
+        json.dumps({"trace_id": "t2", "key": "thumbs", "score": 1}),
+    ]) + "\n")
+    result = CliRunner().invoke(main_cli, [
+        "import", str(src), "--telemetry", str(events), "--min-score", "0.9"])
+    assert result.exit_code == 0, result.output
+    rows = [json.loads(l) for l in result.output.strip().splitlines()
+            if l.startswith("{")]
+    assert len(rows) == 1
+    assert rows[0]["trace_id"] == "t2" and rows[0]["reward"] == 1.0
+
+
+def test_redaction_covers_content_and_tool_arguments(tmp_path):
+    src = tmp_path / "convs.jsonl"
+    src.write_text(json.dumps({"messages": [
+        {"role": "user", "content": "email bob@example.com please"},
+        {"role": "assistant", "content": "on it",
+         "tool_calls": [{"id": "c1", "type": "function",
+                         "function": {"name": "send",
+                                      "arguments": '{"to": "bob@example.com"}'}}]},
+    ]}) + "\n")
+    result = CliRunner().invoke(main_cli, ["import", str(src), "--redact", "email"])
+    assert result.exit_code == 0, result.output
+    row = json.loads(next(l for l in result.output.splitlines() if l.startswith("{")))
+    assert "bob@example.com" not in json.dumps(row)
+    assert "[REDACTED:email]" in row["messages"][0]["content"]
+    assert "[REDACTED:email]" in row["messages"][1]["tool_calls"][0]["function"]["arguments"]
 
 
 def test_skips_conversations_without_assistant_or_too_short():
@@ -198,7 +288,11 @@ def test_import_command_min_score_rejected_for_other_formats(tmp_path):
     result = CliRunner().invoke(main_cli, ["import", str(src), "-f", "openai",
                                            "--min-score", "0.5"])
     assert result.exit_code != 0
-    assert "only apply to -f langsmith" in result.output
+    assert "needs a reward source" in result.output
+    result2 = CliRunner().invoke(main_cli, ["import", str(src), "-f", "openai",
+                                            "--feedback-key", "x"])
+    assert result2.exit_code != 0
+    assert "only applies to -f langsmith" in result2.output
 
 
 def test_import_command_empty_result_errors(tmp_path):

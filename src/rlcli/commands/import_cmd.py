@@ -1,6 +1,9 @@
-"""rlcli import — normalize chat-dump JSONL into train-ready messages JSONL.
+"""rlcli import — normalize chat dumps into train-ready messages JSONL.
 
 Pipes into training: rlcli import -f openai dump.jsonl | rlcli train sl --dataset - ...
+Tool calls are preserved by default (renderer-shaped); telemetry events can be
+joined on trace_id to supply rewards; PII redaction runs before anything is
+written.
 """
 
 from __future__ import annotations
@@ -11,6 +14,8 @@ import sys
 import click
 
 from rlcli.importers import FORMATS, ImportFormatError, iter_conversations
+from rlcli.redact import RedactionError, build_redactors, redact_record
+from rlcli.telemetry import TelemetryFormatError, load_telemetry
 
 
 @click.command("import")
@@ -18,37 +23,77 @@ from rlcli.importers import FORMATS, ImportFormatError, iter_conversations
 @click.option("--format", "-f", "fmt", type=click.Choice(FORMATS), default="messages",
               show_default=True,
               help="messages: {'messages': [...]} per line. openai: chat-completions "
-                   "dumps (tool_calls turns dropped). anthropic: Messages API dumps "
-                   "(content blocks flattened, top-level system kept). langsmith: "
-                   "LangSmith run exports (feedback scores become a 'reward' field).")
+                   "dumps. anthropic: Messages API dumps (content blocks, tool_use/"
+                   "tool_result). langsmith: run exports (feedback → 'reward'). "
+                   "csv: one exchange per row (user/assistant, prompt/completion, "
+                   "input/output or question/answer columns; optional system, reward). "
+                   "vercel: AI SDK messages with 'parts'.")
 @click.option("--out", "-o", type=click.Path(dir_okay=False, allow_dash=True), default="-",
               show_default=True, help="Output path; '-' streams to stdout for piping.")
 @click.option("--min-messages", type=int, default=2, show_default=True,
               help="Skip conversations with fewer usable messages.")
 @click.option("--limit", type=int, default=None, help="Stop after N conversations.")
+@click.option("--drop-tools", is_flag=True, default=False,
+              help="Strip tool calls/results instead of preserving them "
+                   "(pre-0.2 behavior).")
 @click.option("--feedback-key", default=None,
               help="langsmith only: which feedback key supplies the reward "
                    "(required when runs carry more than one).")
+@click.option("--telemetry", "telemetry_file", type=click.Path(exists=True, dir_okay=False),
+              default=None,
+              help="Telemetry events JSONL ({'trace_id', 'score', optional 'key'}); "
+                   "mean score per trace_id becomes the conversation's reward.")
+@click.option("--telemetry-key", default=None,
+              help="Only use telemetry events with this key (required when the "
+                   "file carries more than one).")
 @click.option("--min-score", type=float, default=None,
-              help="langsmith only: keep only runs whose reward is >= this; "
-                   "runs without feedback are dropped.")
-def cli(input_file, fmt, out, min_messages, limit, feedback_key, min_score):
+              help="Keep only conversations whose reward is >= this; "
+                   "conversations without a reward are dropped.")
+@click.option("--redact", "redact_names", multiple=True,
+              help="Built-in PII redaction to apply (email, phone, ssn, "
+                   "credit_card, ipv4, api_key, or 'all'). Repeatable.")
+@click.option("--redact-pattern", "redact_custom", multiple=True,
+              help="Custom redaction as name=regex. Repeatable.")
+def cli(input_file, fmt, out, min_messages, limit, drop_tools, feedback_key,
+        telemetry_file, telemetry_key, min_score, redact_names, redact_custom):
     """Convert INPUT_FILE ('-' for stdin) to training-ready messages JSONL."""
-    if fmt != "langsmith" and (feedback_key is not None or min_score is not None):
-        raise click.UsageError("--feedback-key/--min-score only apply to -f langsmith")
+    if fmt != "langsmith" and feedback_key is not None:
+        raise click.UsageError("--feedback-key only applies to -f langsmith")
+    if min_score is not None and fmt != "langsmith" and telemetry_file is None \
+            and fmt != "csv" and fmt != "messages":
+        raise click.UsageError(
+            "--min-score needs a reward source: -f langsmith, -f csv with a "
+            "reward column, -f messages with reward fields, or --telemetry")
+    try:
+        redactors = build_redactors(list(redact_names), list(redact_custom))
+    except RedactionError as e:
+        raise click.ClickException(str(e))
+    rewards_by_trace: dict[str, float] = {}
+    if telemetry_file is not None:
+        try:
+            with open(telemetry_file, "r", encoding="utf-8") as tf:
+                rewards_by_trace = load_telemetry(tf, key=telemetry_key)
+        except TelemetryFormatError as e:
+            raise click.ClickException(str(e))
+
     src = sys.stdin if input_file == "-" else open(input_file, "r", encoding="utf-8")
     dst = sys.stdout if out == "-" else open(out, "w", encoding="utf-8")
-    written = skipped_low = 0
+    written = skipped_low = joined = 0
     try:
         for record, _lineno in iter_conversations(
-            src, fmt, min_messages=min_messages, feedback_key=feedback_key
+            src, fmt, min_messages=min_messages, feedback_key=feedback_key,
+            preserve_tools=not drop_tools,
         ):
-            if min_score is not None and record.get("reward", None) is None:
+            trace_id = record.get("trace_id")
+            if trace_id in rewards_by_trace:
+                record["reward"] = rewards_by_trace[trace_id]
+                joined += 1
+            if min_score is not None and (
+                record.get("reward") is None or record["reward"] < min_score
+            ):
                 skipped_low += 1
                 continue
-            if min_score is not None and record["reward"] < min_score:
-                skipped_low += 1
-                continue
+            record = redact_record(record, redactors)
             dst.write(json.dumps(record, ensure_ascii=False) + "\n")
             written += 1
             if limit is not None and written >= limit:
@@ -60,8 +105,13 @@ def cli(input_file, fmt, out, min_messages, limit, feedback_key, min_score):
             src.close()
         if dst is not sys.stdout:
             dst.close()
-    note = f", {skipped_low} below --min-score" if min_score is not None else ""
-    click.echo(f"Wrote {written} conversations ({fmt} → messages JSONL{note})", err=True)
+    notes = []
+    if telemetry_file is not None:
+        notes.append(f"{joined} telemetry-joined")
+    if min_score is not None:
+        notes.append(f"{skipped_low} below --min-score")
+    suffix = f" ({', '.join(notes)})" if notes else ""
+    click.echo(f"Wrote {written} conversations ({fmt} → messages JSONL){suffix}", err=True)
     if written == 0:
         raise click.ClickException(
             "No usable conversations found (need an assistant message and "

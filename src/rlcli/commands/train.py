@@ -131,11 +131,11 @@ def sl(dataset_path, model_name, base_url, renderer_name, batch_size, learning_r
     dataset_path = _materialize_dataset(dataset_path)
     _prepare_env(base_url)
     from tinker_cookbook.supervised import train as sl_train
-    from tinker_cookbook.supervised.data import FromConversationFileBuilder
+    from rlcli.tool_dataset import ToolAwareConversationFileBuilder
     from tinker_cookbook.supervised.types import ChatDatasetBuilderCommonConfig
 
     renderer_name = _renderer_for(model_name, renderer_name)
-    builder = FromConversationFileBuilder(
+    builder = ToolAwareConversationFileBuilder(
         file_path=dataset_path,
         test_size=test_size,
         common_config=ChatDatasetBuilderCommonConfig(
