@@ -302,7 +302,7 @@ def test_import_command_min_score_rejected_for_other_formats(tmp_path):
     result = CliRunner().invoke(main_cli, ["import", str(src), "-f", "openai",
                                            "--min-score", "0.5"])
     assert result.exit_code != 0
-    assert "needs a reward source" in result.output
+    assert "need a reward source" in result.output
     result2 = CliRunner().invoke(main_cli, ["import", str(src), "-f", "openai",
                                             "--feedback-key", "x"])
     assert result2.exit_code != 0
