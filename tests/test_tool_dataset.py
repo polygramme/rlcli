@@ -2,11 +2,14 @@ import json
 
 import pytest
 
+# rlcli.tool_dataset imports chz + tinker_cookbook at module level — the
+# whole test module skips in cookbook-less environments (unit CI job).
+pytest.importorskip("tinker_cookbook")
+
 
 def test_tool_calls_render_through_builder(tmp_path):
     """A preserved tool-call conversation must survive Arrow round-trip,
     dict→ToolCall coercion, and real rendering into a training Datum."""
-    pytest.importorskip("tinker_cookbook")
     from tinker_cookbook.supervised.types import ChatDatasetBuilderCommonConfig
 
     from rlcli.tool_dataset import ToolAwareConversationFileBuilder
@@ -49,7 +52,6 @@ def test_tool_calls_render_through_builder(tmp_path):
 def test_coerce_message_strips_arrow_nulls():
     from rlcli.tool_dataset import coerce_message
 
-    pytest.importorskip("tinker_cookbook")
     m = coerce_message({"role": "assistant", "content": None, "tool_calls": None,
                         "tool_call_id": None})
     assert m == {"role": "assistant", "content": ""}
