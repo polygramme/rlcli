@@ -47,3 +47,4 @@ allow-direct-references = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["docker: needs a local Docker daemon"]

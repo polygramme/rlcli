@@ -12,6 +12,7 @@ LAZY_SUBCOMMANDS = {
     "serve": "rlcli.commands.serve:cli",
     "train": "rlcli.commands.train:cli",
     "sample": "rlcli.commands.sample:cli",
+    "synth": "rlcli.commands.synth_cmd:cli",
     "checkpoint": "rlcli.commands.passthrough:checkpoint",
     "run": "rlcli.commands.passthrough:run",
     "session": "rlcli.commands.passthrough:session",

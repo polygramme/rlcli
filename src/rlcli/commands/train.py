@@ -285,6 +285,11 @@ def harbor(model_name, base_url, loss, loss_config, backend_hint, dataset, sandb
     # Concurrent env rendering + shared fast tokenizer = "Already borrowed".
     register_locked_tokenizer(model_name)
 
+    # A local directory (e.g. `rlcli synth` output) is a dataset too. The
+    # cookbook loader joins HARBOR_CACHE_DIR / dataset, and pathlib lets an
+    # absolute right-hand side win — so resolve local dirs to absolute paths.
+    if Path(dataset).is_dir():
+        dataset = str(Path(dataset).resolve())
     dataset_dir = HARBOR_CACHE_DIR / dataset
     if not dataset_dir.is_dir():
         click.echo(f"Downloading harbor dataset {dataset} to {dataset_dir} …")

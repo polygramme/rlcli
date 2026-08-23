@@ -21,6 +21,10 @@ rlcli train harbor --model Qwen/Qwen3-4B-Instruct-2507 --loss gspo --dataset ter
 
 # import your agent's chat dumps and fine-tune on them, all on your hardware
 rlcli import prod-traces.jsonl -f openai | rlcli train sl --dataset - --model Qwen/Qwen3-4B-Instruct-2507
+
+# the continual loop: verified traces -> synthesized sandbox tasks -> agent RL
+rlcli import runs.jsonl -f langsmith --min-score 0.8 | rlcli synth - --out ./tasks --model gpt-5.2 
+rlcli train harbor --model Qwen/Qwen3-4B-Instruct-2507 --dataset ./tasks --loss gspo
 ```
 
 Docs: [docs.polygramme.com](https://docs.polygramme.com) · Install: `pip install polygramme-rlcli` (the `rlcli` command; PyPI reserves the bare name — not to be confused with `rl-cli`, Runloop's CLI).
@@ -58,8 +62,18 @@ One JSON object per line:
 `rlcli import` produces this from common chat dumps: `-f openai` (chat-completions
 dumps; tool-call turns dropped), `-f anthropic` (Messages API dumps; content blocks
 flattened, top-level `system` kept), `-f messages` (already-shaped, roles normalized
-— `human`→`user`, `ai`→`assistant`). Imported traces feed SFT/distillation; RL needs
-an environment and reward (see roadmap).
+— `human`→`user`, `ai`→`assistant`), `-f langsmith` (LangSmith run exports; feedback
+scores become a `reward` field, `--min-score` keeps only verified traces).
+
+## Trace → environment synthesis (`synth`)
+
+`rlcli synth` turns imported traces into Harbor-format training environments: an
+LLM (any OpenAI-compatible endpoint, including a local vLLM) drafts an
+instruction + test script per conversation, rlcli scaffolds the task directory,
+and validation builds the Docker image and requires the test to FAIL on an
+untouched container — a test an idle agent passes is not a reward signal. Each
+task.toml records lineage (`[synth]` source file/line + imported reward), and
+the output directory feeds `rlcli train harbor --dataset ./tasks` directly.
 
 ## Development
 
@@ -73,6 +87,6 @@ Policy: tinker and tinker-cookbook are pinned dependencies; we do not carry patc
 
 ## Roadmap
 
-Trace import from more sources (LangSmith with verdict-based rewards) → PII redaction → on-policy distillation and multi-tenant LoRA → trace-synthesized environments → the continual-learning loop.
+Richer environment synthesis (multi-turn tasks, rubric graders, solution replay) → PII redaction → on-policy distillation and multi-tenant LoRA → the scheduled continual-learning loop.
 
 Apache-2.0.
