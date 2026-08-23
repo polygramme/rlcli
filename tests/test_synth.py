@@ -88,6 +88,7 @@ def test_synthesize_reports_generation_failure_and_success(tmp_path):
 def test_validate_task_rejects_trivially_passing_test(tmp_path):
     import asyncio
 
+    pytest.importorskip("tinker_cookbook")  # validate_task uses sandbox_docker
     from rlcli.synth import validate_task
 
     trivial = dict(GOOD, test_script="true")

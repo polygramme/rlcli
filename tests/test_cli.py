@@ -43,7 +43,8 @@ def test_train_rl_guard_allows_gspo_on_fsdp():
     if result.exit_code == 0:
         assert "loss_fn=gspo" in result.output
     else:
-        assert "tinker_cookbook" in str(result.exception) or "No module" in str(result.exception)
+        combined = str(result.output) + str(result.exception)
+        assert "tinker-cookbook" in combined or "No module" in combined
 
 
 def test_train_unknown_model_gets_clear_renderer_error():

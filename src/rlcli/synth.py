@@ -24,8 +24,6 @@ from typing import Any, Callable
 
 import httpx
 
-from rlcli.sandbox_docker import _ensure_image, _run
-
 REQUIRED_KEYS = ("name", "instruction", "test_script")
 
 DEFAULT_DOCKERFILE = """\
@@ -131,6 +129,11 @@ async def validate_task(task_dir: Path, timeout: int = 300) -> tuple[bool, str]:
     """Build the environment image and run tests/test.sh on an untouched
     container. Valid means: image builds AND the test exits nonzero (an idle
     agent must not be rewarded)."""
+    # Deferred: sandbox_docker imports tinker_cookbook, which only the
+    # [train]-extra environment has; synth's other functions stay importable
+    # everywhere.
+    from rlcli.sandbox_docker import _ensure_image, _run
+
     env_dir = task_dir / "environment"
     try:
         tag = await _ensure_image(env_dir)

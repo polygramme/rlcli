@@ -190,10 +190,12 @@ def rl(model_name, base_url, loss, loss_config, backend_hint, dataset, renderer_
        batch_size, group_size, learning_rate, max_tokens, lora_rank, save_every,
        eval_every, max_steps, log_path, dry_run):
     """RL on a built-in environment, with the full SkyRL loss set."""
-    _require_cookbook()
+    # Loss/backend guard runs first: it needs no cookbook and its error is
+    # more actionable than a missing-dependency message.
     backend = backend_hint or backend_for_url(base_url)
     ensure_loss_supported(loss, backend)
     _warn_known_upstream_issues(loss)
+    _require_cookbook()
     _prepare_env(base_url)
 
     from tinker_cookbook.recipes.math_rl.math_env import Gsm8kDatasetBuilder
@@ -267,9 +269,9 @@ def harbor(model_name, base_url, loss, loss_config, backend_hint, dataset, sandb
            learning_rate, max_tokens, max_turns, lora_rank, save_every, eval_every,
            max_steps, sandbox_timeout, command_timeout, log_path, dry_run):
     """RL on Harbor tasks in local Docker sandboxes, reward from tests/test.sh."""
-    _require_cookbook()
     backend = backend_hint or backend_for_url(base_url)
     ensure_loss_supported(loss, backend)
+    _require_cookbook()
     _warn_known_upstream_issues(loss)
     _prepare_env(base_url)
 
