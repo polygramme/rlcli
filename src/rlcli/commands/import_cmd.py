@@ -58,15 +58,20 @@ from rlcli.telemetry import TelemetryFormatError, load_telemetry
                    "file carries more than one).")
 @click.option("--min-score", type=float, default=None,
               help="Keep only conversations whose reward is >= this; "
-                   "conversations without a reward are dropped.")
+                   "conversations without a reward are dropped. "
+                   "(Successes → SFT.)")
+@click.option("--max-score", type=float, default=None,
+              help="Keep only conversations whose reward is <= this; "
+                   "conversations without a reward are dropped. "
+                   "(Failures → `rlcli synth` test environments.)")
 @click.option("--redact", "redact_names", multiple=True,
               help="Built-in PII redaction to apply (email, phone, ssn, "
                    "credit_card, ipv4, api_key, or 'all'). Repeatable.")
 @click.option("--redact-pattern", "redact_custom", multiple=True,
               help="Custom redaction as name=regex. Repeatable.")
 def cli(input_file, project, fmt, out, min_messages, limit, drop_tools,
-        feedback_key, telemetry_file, telemetry_key, min_score, redact_names,
-        redact_custom):
+        feedback_key, telemetry_file, telemetry_key, min_score, max_score,
+        redact_names, redact_custom):
     """Convert INPUT_FILE ('-' for stdin) to training-ready messages JSONL."""
     if project is not None:
         if input_file is not None:
@@ -76,11 +81,13 @@ def cli(input_file, project, fmt, out, min_messages, limit, drop_tools,
         raise click.UsageError("Missing INPUT_FILE (or use --project).")
     if fmt != "langsmith" and feedback_key is not None:
         raise click.UsageError("--feedback-key only applies to -f langsmith")
-    if min_score is not None and fmt != "langsmith" and telemetry_file is None \
-            and fmt != "csv" and fmt != "messages":
+    score_filter = min_score is not None or max_score is not None
+    if score_filter and fmt not in ("langsmith", "csv", "messages") \
+            and telemetry_file is None:
         raise click.UsageError(
-            "--min-score needs a reward source: -f langsmith, -f csv with a "
-            "reward column, -f messages with reward fields, or --telemetry")
+            "--min-score/--max-score need a reward source: -f langsmith, "
+            "-f csv with a reward column, -f messages with reward fields, "
+            "or --telemetry")
     try:
         redactors = build_redactors(list(redact_names), list(redact_custom))
     except RedactionError as e:
@@ -110,8 +117,10 @@ def cli(input_file, project, fmt, out, min_messages, limit, drop_tools,
             if trace_id in rewards_by_trace:
                 record["reward"] = rewards_by_trace[trace_id]
                 joined += 1
-            if min_score is not None and (
-                record.get("reward") is None or record["reward"] < min_score
+            if score_filter and (
+                record.get("reward") is None
+                or (min_score is not None and record["reward"] < min_score)
+                or (max_score is not None and record["reward"] > max_score)
             ):
                 skipped_low += 1
                 continue
@@ -130,8 +139,8 @@ def cli(input_file, project, fmt, out, min_messages, limit, drop_tools,
     notes = []
     if telemetry_file is not None:
         notes.append(f"{joined} telemetry-joined")
-    if min_score is not None:
-        notes.append(f"{skipped_low} below --min-score")
+    if score_filter:
+        notes.append(f"{skipped_low} outside score filter")
     suffix = f" ({', '.join(notes)})" if notes else ""
     click.echo(f"Wrote {written} conversations ({fmt} → messages JSONL){suffix}", err=True)
     if written == 0:

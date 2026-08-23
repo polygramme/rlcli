@@ -279,7 +279,21 @@ def test_import_command_langsmith_min_score(tmp_path):
     assert result.exit_code == 0, result.output
     rows = [json.loads(l) for l in out.read_text().splitlines()]
     assert len(rows) == 1 and rows[0]["reward"] == 1.0
-    assert "2 below --min-score" in result.output
+    assert "2 outside score filter" in result.output
+
+
+def test_import_command_max_score_selects_failures(tmp_path):
+    src = tmp_path / "runs.jsonl"
+    src.write_text("\n".join([
+        _ls_run(feedback_stats={"correctness": {"n": 1, "avg": 1.0}}),
+        _ls_run(feedback_stats={"correctness": {"n": 1, "avg": 0.2}}),
+        _ls_run(),  # no feedback → dropped under score filter
+    ]) + "\n")
+    result = CliRunner().invoke(main_cli, ["import", str(src), "-f", "langsmith",
+                                           "--max-score", "0.3"])
+    assert result.exit_code == 0, result.output
+    rows = [json.loads(l) for l in result.output.splitlines() if l.startswith("{")]
+    assert len(rows) == 1 and rows[0]["reward"] == 0.2
 
 
 def test_import_command_min_score_rejected_for_other_formats(tmp_path):
