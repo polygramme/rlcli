@@ -1,0 +1,107 @@
+---
+title: "Polygramme Cloud: hosted trainers with the same CLI"
+sidebarTitle: "Polygramme Cloud"
+description: "Point rlcli at a hosted Tinker-API trainer instead of your own GPU. Two tiers (dedicated GPU or a shared multi-tenant LoRA server), an OpenAI-compatible chat endpoint over what you trained, and full-weight downloads."
+---
+
+Polygramme Cloud runs the same training server `rlcli serve` gives you locally, on GPUs we operate. Everything you already know applies: the Tinker API, the `rlcli train` commands, the tinker SDK. Two things change — you don't run `rlcli serve`, and you get a console at [polygramme.com/console](https://polygramme.com/console) that mints keys, shows usage, serves your adapters, and hands you your weights.
+
+<Note>
+Cloud is in preview. Trainers scale to zero when idle; the first request after an idle period pays a 3–6 minute cold boot. Warm a trainer from the console before a training run or a chat session.
+</Note>
+
+## Two tiers
+
+| | Dedicated | Shared |
+|---|---|---|
+| What you get | One GPU, yours for the session | A slot on a warm multi-tenant LoRA server |
+| Training | Full-parameter or LoRA (FSDP) | LoRA only, fixed rank/alpha per base (Megatron multi-LoRA) |
+| Base model | Per deployment (default Qwen3-4B-Instruct-2507) | One base per server (currently Qwen3.5-9B) |
+| Isolation | Hardware | Per-key ownership of every `model_id`; other keys get 403 |
+| Best for | Full fine-tunes, custom backend config | Many small runs, continual per-tenant adapters, lowest cost |
+
+Both tiers speak the same protocol and share one product shell: API keys from the console, per-key metering, HMAC-signed expiring download links, and the chat endpoint below.
+
+## Quickstart
+
+1. Sign in at [polygramme.com/console](https://polygramme.com/console) and create an API key (**Settings → API keys**). Keys look like `pg_…`.
+2. Pick a tier in the console header and press **Warm**. The URL for the selected tier is shown in the quickstart card.
+3. Train exactly as you would locally, with `--base-url` pointed at the trainer:
+
+```bash
+pip install polygramme-rlcli
+
+export TINKER_API_KEY=pg_…
+export PG_URL=https://attach--pg-shared-sharedserver-serve.modal.run   # or the dedicated URL
+
+rlcli train sl --base-url $PG_URL \
+  --model Qwen/Qwen3.5-9B --dataset conversations.jsonl \
+  --lora-rank 32 --save-every 25
+```
+
+The tinker SDK works unchanged too — set `TINKER_API_KEY` and `TINKER_BASE_URL=$PG_URL`.
+
+<Tip>
+On the shared tier every adapter must use the server's LoRA signature (rank 32, alpha 64 by default). Mismatched ranks are rejected at `create_lora_training_client`.
+</Tip>
+
+## Chat with what you trained
+
+Every trainer exposes an OpenAI-compatible endpoint over your sampler checkpoints. As soon as a run calls `save_weights_for_sampler` (rlcli does this at every `--save-every` step and at the end), the adapter is servable — no export, no second deployment, LoRA unmerged.
+
+```bash
+curl $PG_URL/v1/chat/completions \
+  -H "Authorization: Bearer $TINKER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "<your model_id>",
+    "messages": [{"role": "user", "content": "Summarize the ticket below."}],
+    "max_tokens": 256
+  }'
+```
+
+`model` accepts:
+
+| Value | Serves |
+|---|---|
+| `<model_id>` | The latest sampler checkpoint of that run |
+| `<model_id>:<checkpoint>` | A specific sampler checkpoint |
+| `tinker://<model_id>/sampler_weights/<checkpoint>` | Same, as a tinker path |
+| `""` or the base model name | The untouched base model |
+
+`GET $PG_URL/v1/models` lists what your key can serve, with every checkpoint. The OpenAI Python SDK works as-is:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url=f"{PG_URL}/v1", api_key=PG_KEY)
+r = client.chat.completions.create(model="<your model_id>",
+                                   messages=[{"role": "user", "content": "hi"}],
+                                   stream=True)
+```
+
+Only the key that owns a `model_id` can chat with it. The console's **Playground** uses the same endpoint on your behalf.
+
+## Get your weights
+
+Containers are ephemeral: download before a trainer goes idle.
+
+- **Checkpoints** in the console list everything your key owns — training checkpoints, PEFT adapters, and merged exports — with one-hour signed download links and a ready-to-run `vllm serve` snippet.
+- `GET $PG_URL/pg/checkpoints` returns the same listing for scripts; `GET $PG_URL/pg/checkpoints/download?path=adapter/<model_id>` streams a tarball.
+- `POST $PG_URL/pg/export/merged?model_id=<model_id>` merges your adapter into the base model and produces a complete Hugging Face checkpoint (poll `/pg/export/status?job_id=…`). An adapter is a diff; a merged export is a model.
+
+## Usage and metering
+
+The **Usage** panel shows, per month, training tokens (from every `forward_backward`), prompt and completion tokens (sampling and chat), operation counts, GPU-seconds, and an estimated cost at the preview rates shown on the page — broken down by model and by key. It reads from the console's own store, so it never wakes a trainer.
+
+## Endpoint reference
+
+| Endpoint | Purpose |
+|---|---|
+| `/api/v1/*` | The Tinker API, passed through with auth, ownership and metering |
+| `POST /v1/chat/completions`, `GET /v1/models` | OpenAI-compatible serving over your sampler checkpoints |
+| `GET /pg/status` | Tier, base model, GPU, readiness (unauthenticated — used to warm) |
+| `GET /pg/runs` | This boot's activity and your lifetime usage on it |
+| `GET /pg/checkpoints`, `GET /pg/checkpoints/download` | Listing and downloads |
+| `POST /pg/export/merged`, `GET /pg/export/status` | Merged full-weight export |
+
+Keys are accepted as `Authorization: Bearer`, `x-api-key`, or a `/k/<key>/` URL prefix for clients that can't set headers.

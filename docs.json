@@ -40,7 +40,8 @@
               "guides/reinforcement-learning",
               "guides/harbor-agent-rl",
               "guides/importing-traces",
-              "guides/sampling-and-checkpoints"
+              "guides/sampling-and-checkpoints",
+              "guides/cloud"
             ]
           }
         ]
