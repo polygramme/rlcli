@@ -71,6 +71,13 @@ def ensure_installed(backend: str, log=print) -> Path:
     if backend not in BACKEND_EXTRAS:
         raise ServerError(f"Unknown backend {backend!r}. Known: {', '.join(BACKEND_EXTRAS)}")
     checkout = skyrl_checkout(log=log)
+    # Prebuilt environments (e.g. a container image that already ran uv sync)
+    # can skip the sync: it re-resolves git deps and re-verifies wheels over
+    # the network on every start, which costs minutes of GPU time per cold
+    # boot for an env that cannot have changed.
+    if os.environ.get("RLCLI_SKIP_SYNC") == "1" and (checkout / ".venv").exists():
+        log(f"RLCLI_SKIP_SYNC=1: trusting existing env in {checkout} …")
+        return checkout
     log(f"Syncing skyrl env in {checkout} (first run can take a few minutes) …")
     subprocess.run(
         ["uv", "sync", "--extra", "tinker", "--extra", BACKEND_EXTRAS[backend]],
