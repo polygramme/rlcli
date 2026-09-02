@@ -36,7 +36,7 @@ Set `RLCLI_HOME` to move the entire runtime directory somewhere else. Set `RLCLI
 
 ## How training commands run
 
-`rlcli train sl`, `rlcli train rl`, and `rlcli train harbor` do not shell out to `tinker`. They import pinned `tinker-cookbook` recipes and invoke them as chz-configured plain functions. This keeps logs, error traces, and stack frames inside rlcli, and lets rlcli validate flags (like loss/backend compatibility) before any GPU work starts.
+`rlcli train sl`, `rlcli train rl`, `rlcli train harbor`, and `rlcli train opsd` do not shell out to `tinker`. They import pinned `tinker-cookbook` recipes and invoke them as chz-configured plain functions. This keeps logs, error traces, and stack frames inside rlcli, and lets rlcli validate flags (like loss/backend compatibility) before any GPU work starts.
 
 ## Passthrough commands
 

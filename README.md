@@ -19,6 +19,9 @@ rlcli train rl --model Qwen/Qwen3-4B-Instruct-2507 --loss gspo
 # agent RL in sandboxed environments: Docker container + instruction + test script = reward
 rlcli train harbor --model Qwen/Qwen3-4B-Instruct-2507 --loss gspo --dataset terminal-bench@2.0
 
+# on-policy self-distillation: the same weights, given a privileged hint, teach the student
+rlcli train opsd --model Qwen/Qwen3-4B-Instruct-2507 --dataset prompts.jsonl --teacher-hint "Think step by step and check your arithmetic."
+
 # import your agent's chat dumps and fine-tune on them, all on your hardware
 rlcli import prod-traces.jsonl -f openai | rlcli train sl --dataset - --model Qwen/Qwen3-4B-Instruct-2507
 
@@ -48,6 +51,7 @@ Measured, with receipts in [`benchmarks/`](benchmarks/):
 - Backends: `jax` (runs anywhere, CPU ok), `fsdp` / `megatron` (Linux + CUDA; serve the full loss set incl. `gspo`, `cispo`, `dppo`, `ppo_critic`).
 - `rlcli train` invokes pinned [tinker-cookbook](https://github.com/thinking-machines-lab/tinker-cookbook) recipes programmatically. `--loss gspo` on a JAX server fails fast with a clear error.
 - `rlcli train harbor` runs Harbor-format tasks (Dockerfile + instruction + test script) on your local Docker daemon — the test verdict is the reward. No cloud sandbox account needed.
+- `rlcli train opsd` runs on-policy distillation from a prompts JSONL (`{"prompt": ...}` or `{"messages": [...]}`): the student samples, a teacher (`--teacher`: any base model or `tinker://` checkpoint on the server; default the student's own base) scores those tokens, and the negative reverse KL becomes the per-token advantage. `--teacher-hint TEXT` gives the teacher privileged context the student never sees.
 - `rlcli checkpoint / run / session` pass through to the official tinker CLI, pointed at your server.
 - Everything stays in your environment: traces, data, training, weights.
 

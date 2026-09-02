@@ -76,6 +76,9 @@ rlcli train sl --model Qwen/Qwen3-4B-Instruct-2507 --dataset conversations.jsonl
 # RL with GSPO
 rlcli train rl --model Qwen/Qwen3-4B-Instruct-2507 --loss gspo --dataset gsm8k
 
+# On-policy self-distillation with a privileged hint
+rlcli train opsd --model Qwen/Qwen3-4B-Instruct-2507 --dataset prompts.jsonl --teacher-hint "Think step by step."
+
 # Import chat dumps and pipe straight into training
 rlcli import prod.jsonl -f openai | rlcli train sl --dataset - --model Qwen/Qwen3-4B-Instruct-2507
 ```

@@ -1,10 +1,10 @@
 ---
-title: "rlcli train: one-shot SL, RL, and Harbor agent training"
+title: "rlcli train: one-shot SL, RL, Harbor agent, and self-distillation training"
 sidebarTitle: "train"
-description: "Use rlcli train sl, rl, and harbor to run supervised fine-tuning, RL on GSM8K, and sandboxed Harbor agent RL on local GPUs."
+description: "Use rlcli train sl, rl, harbor, and opsd to run supervised fine-tuning, RL on GSM8K, sandboxed Harbor agent RL, and on-policy self-distillation on local GPUs."
 ---
 
-rlcli provides three training subcommands under `train`: `sl` for supervised fine-tuning, `rl` for reinforcement learning on math benchmarks, and `harbor` for sandboxed agent RL. Each subcommand sends requests to the Tinker API at `--base-url` and automatically sets `TINKER_API_KEY=tml-dummy`.
+rlcli provides four training subcommands under `train`: `sl` for supervised fine-tuning, `rl` for reinforcement learning on math benchmarks, `harbor` for sandboxed agent RL, and `opsd` for on-policy self-distillation from a prompts file. Each subcommand sends requests to the Tinker API at `--base-url` and automatically sets `TINKER_API_KEY=tml-dummy`.
 
 <Tabs>
   <Tab title="sl">
@@ -272,6 +272,97 @@ rlcli provides three training subcommands under `train`: `sl` for supervised fin
     rlcli train harbor --model Qwen/Qwen3-4B-Instruct-2507 \
       --dataset terminal-bench@2.0 --sandbox docker --max-steps 50
     ```
+  </Tab>
+  <Tab title="opsd">
+    ## train opsd
+
+    On-policy self-distillation on a prompts JSONL. Each step the student samples `--group-size` completions per prompt, a teacher scores the student's own tokens, and the negative reverse KL (student || teacher) becomes the per-token advantage for an `importance_sampling` update. There is no reward: the teacher is the only signal. Drives the pinned cookbook's `distillation.train_on_policy` recipe.
+
+    ```bash
+    rlcli train opsd --dataset <PATH> --model <MODEL> [OPTIONS]
+    ```
+
+    ### Flags
+
+    <ParamField path="--dataset" type="string" required>
+      Path to a JSONL file, or `-` to read from stdin. Each line is `{"prompt": "..."}` or `{"messages": [...]}`; for messages, the last user turn is the prompt and earlier system/user/assistant text turns are context (trailing assistant turns are dropped).
+    </ParamField>
+
+    <ParamField path="--model" type="string" required>
+      HuggingFace model name of the student.
+    </ParamField>
+
+    <ParamField path="--base-url" default="http://localhost:8000" type="string">
+      Tinker API server URL.
+    </ParamField>
+
+    <ParamField path="--teacher" type="string">
+      Teacher: a base model name, or a `tinker://...` checkpoint of `--model` on the same server. Defaults to `--model` itself (self-distillation).
+    </ParamField>
+
+    <ParamField path="--teacher-hint" type="string">
+      Privileged text the teacher sees prepended to every prompt (hint, blank line, prompt). The student never sees it, so with the default teacher this is "same weights + hint" self-distillation.
+    </ParamField>
+
+    <ParamField path="--kl-coef" default="1.0" type="float">
+      Weight of the negative reverse KL in the per-token advantages.
+    </ParamField>
+
+    <ParamField path="--kl-discount" default="0.0" type="float">
+      Discount for summing future per-token KL into each advantage. `0` keeps it per-token.
+    </ParamField>
+
+    <ParamField path="--steps" type="int">
+      Stop after N steps. Defaults to one pass over the dataset.
+    </ParamField>
+
+    <ParamField path="--renderer" type="string">
+      Renderer to use. Defaults to the recommended renderer for the model.
+    </ParamField>
+
+    <ParamField path="--batch-size" default="32" type="int">
+      Prompts per step.
+    </ParamField>
+
+    <ParamField path="--group-size" default="4" type="int">
+      Samples per prompt.
+    </ParamField>
+
+    <ParamField path="--lr" default="1e-4" type="float">
+      Learning rate. `--learning-rate` is an alias.
+    </ParamField>
+
+    <ParamField path="--max-tokens" default="1024" type="int">
+      Maximum tokens to generate per response.
+    </ParamField>
+
+    <ParamField path="--lora-rank" default="32" type="int">
+      LoRA rank.
+    </ParamField>
+
+    <ParamField path="--save-every" default="20" type="int">
+      Save a checkpoint every N steps.
+    </ParamField>
+
+    <ParamField path="--log-path" default="~/.rlcli/runs/opsd-<timestamp>" type="string">
+      Directory for training logs.
+    </ParamField>
+
+    <ParamField path="--dry-run" type="flag">
+      Load the prompts and print the resolved config without contacting the server.
+    </ParamField>
+
+    ### Example
+
+    ```bash
+    rlcli train opsd --model Qwen/Qwen3-4B-Instruct-2507 --dataset prompts.jsonl \
+      --teacher-hint "Think step by step and double-check your arithmetic." \
+      --batch-size 16 --group-size 4 --steps 50
+    ```
+
+    <Note>
+      The teacher scores the student's tokens as rendered with the student's chat template; a `--teacher` with a different template is scored under the student's rendering (the cookbook's assumption too). With `--teacher-hint`, rlcli builds the hinted prompt with the same renderer and wraps the teacher client so its logprob calls see hint + prompt while the student's sequence is unchanged.
+    </Note>
   </Tab>
 </Tabs>
 

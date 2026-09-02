@@ -233,6 +233,100 @@ def rl(model_name, base_url, loss, loss_config, backend_hint, dataset, renderer_
     _run(rl_train.main(config))
 
 
+@cli.command("opsd")
+@click.option("--dataset", "dataset_path", required=True,
+              help='JSONL file: one {"prompt": str} or {"messages": [...]} object per line '
+                   "(for messages, the last user turn is the prompt; earlier turns are "
+                   "context). Use '-' to read from stdin.")
+@click.option("--model", "model_name", required=True, help="HuggingFace model name (the student).")
+@click.option("--base-url", default=DEFAULT_BASE_URL, show_default=True)
+@click.option("--teacher", default=None,
+              help="Teacher: a base model name, or a tinker://... checkpoint of --model on the "
+                   "same server. Default: --model itself (self-distillation).")
+@click.option("--teacher-hint", default=None,
+              help="Privileged text the teacher sees prepended to every prompt (hint, blank "
+                   "line, prompt). The student never sees it.")
+@click.option("--kl-coef", "kl_penalty_coef", type=float, default=1.0, show_default=True,
+              help="Weight of -reverse-KL(student||teacher) in the per-token advantages.")
+@click.option("--kl-discount", "kl_discount_factor", type=float, default=0.0, show_default=True,
+              help="Discount for summing future per-token KL into each advantage (0 = per-token).")
+@click.option("--steps", "max_steps", type=int, default=None,
+              help="Stop after N steps (default: one pass over the dataset).")
+@click.option("--renderer", "renderer_name", default=None)
+@click.option("--batch-size", type=int, default=32, show_default=True, help="Prompts per step.")
+@click.option("--group-size", type=int, default=4, show_default=True, help="Samples per prompt.")
+@click.option("--lr", "--learning-rate", "learning_rate", type=float, default=1e-4, show_default=True)
+@click.option("--max-tokens", type=int, default=1024, show_default=True)
+@click.option("--lora-rank", type=int, default=32, show_default=True)
+@click.option("--save-every", type=int, default=20, show_default=True)
+@click.option("--log-path", default=None, help="Run directory (default: ~/.rlcli/runs/...).")
+@click.option("--dry-run", is_flag=True, help="Load the prompts and print the config, don't train.")
+def opsd(dataset_path, model_name, base_url, teacher, teacher_hint, kl_penalty_coef,
+         kl_discount_factor, max_steps, renderer_name, batch_size, group_size, learning_rate,
+         max_tokens, lora_rank, save_every, log_path, dry_run):
+    """On-policy self-distillation: sample the student, score under a teacher, train on -KL."""
+    _require_cookbook()
+    dataset_path = _materialize_dataset(dataset_path)
+    _prepare_env(base_url)
+
+    from tinker_cookbook.distillation import train_on_policy
+    from tinker_cookbook.distillation.datasets import DistillationDatasetConfig
+
+    from rlcli import opsd as opsd_lib
+
+    try:
+        rows = opsd_lib.load_prompt_rows(dataset_path)
+    except (OSError, opsd_lib.PromptFormatError) as e:
+        raise click.UsageError(f"--dataset: {e}")
+    renderer_name = _renderer_for(model_name, renderer_name)
+    teacher_config = opsd_lib.teacher_config_for(model_name, teacher)
+    dataset_builder = opsd_lib.JsonlPromptDatasetBuilder(
+        file_path=dataset_path,
+        groups_per_batch=batch_size,
+        group_size=group_size,
+        model_name_for_tokenizer=model_name,
+        renderer_name=renderer_name,
+        teacher_hint=teacher_hint,
+    )
+    kwargs = dict(
+        learning_rate=learning_rate,
+        dataset_configs=[
+            DistillationDatasetConfig(
+                dataset_builder=dataset_builder,
+                teacher_config=teacher_config,
+                groups_per_batch=batch_size,
+            )
+        ],
+        model_name=model_name,
+        recipe_name="rlcli_train_opsd",
+        max_tokens=max_tokens,
+        log_path=log_path or _default_log_path("opsd"),
+        renderer_name=renderer_name,
+        lora_rank=lora_rank,
+        kl_penalty_coef=kl_penalty_coef,
+        kl_discount_factor=kl_discount_factor,
+        save_every=save_every,
+        eval_every=0,
+        base_url=base_url,
+        loss_fn="importance_sampling",
+    )
+    if max_steps is not None:
+        kwargs["max_steps"] = max_steps
+    config = train_on_policy.Config(**kwargs)
+    teacher_desc = opsd_lib.describe_teacher(teacher_config, teacher_hint)
+    if dry_run:
+        click.echo(
+            f"[dry-run] opsd config OK: {len(rows)} prompts, teacher={teacher_desc}, "
+            f"kl_coef={kl_penalty_coef} kl_discount={kl_discount_factor}\n{config}"
+        )
+        return
+    click.echo(
+        f"OPSD: {model_name} on {len(rows)} prompts from {dataset_path}, "
+        f"teacher={teacher_desc}, via {base_url}"
+    )
+    _run(opsd_lib.main(config, teacher_hint=teacher_hint))
+
+
 @cli.command("harbor")
 @click.option("--model", "model_name", required=True, help="HuggingFace model name.")
 @click.option("--base-url", default=DEFAULT_BASE_URL, show_default=True)
