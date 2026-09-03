@@ -29,17 +29,17 @@ Both tiers speak the same protocol and share one product shell: API keys from th
 3. Train exactly as you would locally, with `--base-url` pointed at the trainer:
 
 ```bash
-pip install polygramme-rlcli
+pip install polygramme-cloud            # the cloud client — no torch, no GPU deps
 
-export TINKER_API_KEY=pg_…
-export PG_URL=https://attach--pg-shared-sharedserver-serve.modal.run   # or the dedicated URL
-
-rlcli train sl --base-url $PG_URL \
-  --model Qwen/Qwen3.5-9B --dataset conversations.jsonl \
-  --lora-rank 32 --save-every 25
+export POLYGRAMME_API_KEY=pg_…
+polygramme status
+polygramme train --dataset conversations.jsonl --save-every 25 --name support-v1
+polygramme chat --model <model_id> "hi"
 ```
 
-The tinker SDK works unchanged too — set `TINKER_API_KEY` and `TINKER_BASE_URL=$PG_URL`.
+`polygramme-cloud` is a thin client (tinker SDK + a tokenizer). rlcli itself — with its `[train]` extra and tinker-cookbook — is for training on **your own** GPUs; you don't need it to use the cloud. rlcli's train commands also accept `--base-url $PG_URL` if you have it installed.
+
+The tinker SDK works too: `from polygramme_cloud import Cloud; sc = Cloud().service_client()` returns a `tinker.ServiceClient` with auth handled. Full, signed-in docs live in the console at [polygramme.com/app/docs](https://polygramme.com/app/docs).
 
 <Tip>
 On the shared tier every adapter must use the server's LoRA signature (rank 32, alpha 64 by default). Mismatched ranks are rejected at `create_lora_training_client`.
