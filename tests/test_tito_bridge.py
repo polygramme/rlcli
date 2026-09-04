@@ -266,6 +266,22 @@ def test_the_nudge_keeps_bridging_alive(inner, prime, tokenizer):
         assert transcript[i][0][: len(prior)] == prior
 
 
+def test_a_large_observation_counts_toward_the_budget(inner, prime, tokenizer):
+    """The reference subtracts the incoming observation; without it the nudge
+    misses exactly the big tool outputs it exists for."""
+    big = {"role": "tool", "tool_call_id": "c0", "name": "bash", "content": "x " * 3000}
+    obs_tokens = len(tokenizer.encode(big["content"], add_special_tokens=False))  # ~3000
+    # Size the window so the observation alone crosses the 20% line while the
+    # prior (~70 tokens here, no tool schema in this conversation) never would.
+    renderer = make(inner, prime, max_context_tokens=obs_tokens + 500, budget_warning_ratio=0.2)
+    messages = [SYSTEM, USER]
+    renderer.build_generation_prompt(messages)
+    action = completion_tokens(tokenizer, 0)
+    assistant, _ = renderer.parse_response(action)
+    renderer.build_generation_prompt(messages + [assistant, big])
+    assert renderer.nudges == 1, "a ~3k-token observation must pull the nudge forward"
+
+
 def test_no_nudge_while_budget_remains(inner, prime, tokenizer):
     renderer = make(inner, prime, max_context_tokens=200_000, budget_warning_ratio=0.2)
     drive(renderer, tokenizer, turns=4)

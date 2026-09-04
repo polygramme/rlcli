@@ -14,6 +14,7 @@ every time upstream adds a field.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import chz
 from tinker_cookbook import tokenizer_utils
@@ -50,6 +51,23 @@ def make_parse_error_policy(max_consecutive: int):
     return ParseErrorPolicy(max_consecutive=max_consecutive, mask_error_turns=True)
 
 
+# One Prime renderer per model for the whole run. It is stateless, and building
+# one means a fresh LockedTokenizer from the registry factory (~0.9s warm) —
+# per group, per batch, that silently doubled the cookbook's own per-group
+# tokenizer construction (~7s a batch at groups_per_batch=8). Sharing it means
+# every env serialises on one tokenizer lock rather than one per group;
+# tokenization is milliseconds against sandbox and sampling time, so that is
+# the right trade.
+_PRIME: dict[str, Any] = {}
+
+
+def _prime_for(model_name: str):
+    if model_name not in _PRIME:
+        tokenizer = tokenizer_utils.get_tokenizer(model_name)
+        _PRIME[model_name] = prime_renderer_for(model_name, tokenizer)
+    return _PRIME[model_name]
+
+
 def install_bridge(
     builder: HarborEnvGroupBuilder,
     *,
@@ -70,8 +88,7 @@ def install_bridge(
                 # not plumbed through rl_train.Config, so we set it here.
                 env.parse_error_policy = policy
 
-        tokenizer = tokenizer_utils.get_tokenizer(builder.model_name)
-        prime = prime_renderer_for(builder.model_name, tokenizer)
+        prime = _prime_for(builder.model_name)
         if prime is None:
             # No hand-written renderer for this model: leave the group exactly as
             # the cookbook built it. Every turn re-renders, which is today's

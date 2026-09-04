@@ -164,9 +164,11 @@ class BridgingRenderer:
         # observations that follow it.
         new_messages = messages[self._n_messages + 1 :] if have_state else []
 
-        if new_messages and self._should_nudge():
-            if append_budget_warning(new_messages, self._warning_text()):
-                self.nudges += 1
+        if new_messages:
+            remaining = self._remaining_after(new_messages)
+            if remaining is not None and remaining <= self._warn_ratio * self._max_context:
+                if append_budget_warning(new_messages, self._warning_text(remaining)):
+                    self.nudges += 1
 
         # ``kwargs`` means a caller wants non-default rendering; don't try to
         # reproduce that through the bridge, just re-render.
@@ -228,20 +230,50 @@ class BridgingRenderer:
             return None
         return ids
 
-    def _should_nudge(self) -> bool:
-        if self._warn_ratio is None or not self._max_context:
-            return False
-        if self._prompt_ids is None:
-            return False
-        used = len(self._prompt_ids) + len(self._completion_ids or [])
-        return (self._max_context - used) <= self._warn_ratio * self._max_context
+    def _observation_estimate(self, new_messages: list[Message]) -> int:
+        """Tokens the observations about to be appended will add.
 
-    def _warning_text(self) -> str:
+        The reference (``TITOAgentState.record_step``) subtracts this before
+        deciding to nudge. Without it the check sees only the prior sequence:
+        a 4k-token test log arriving with 7k of headroom sails past a 6.5k
+        threshold, and the episode overflows before the nudge ever fires — on
+        exactly the large outputs it exists for. Encoding the raw text omits
+        template framing, so this runs slightly optimistic, the same direction
+        as the reference.
+        """
+        parts = []
+        for m in new_messages:
+            if m.get("role") != "tool":
+                continue
+            c = m.get("content")
+            if isinstance(c, str):
+                parts.append(c)
+            elif isinstance(c, list):
+                parts.extend(p.get("text", "") for p in c if isinstance(p, dict))
+        text = "\n".join(parts)
+        if not text:
+            return 0
+        tok = (getattr(self._inner, "tokenizer", None)
+               or getattr(self._prime, "tokenizer", None)
+               or getattr(self._prime, "_tokenizer", None))
+        if tok is not None:
+            try:
+                return len(tok.encode(text, add_special_tokens=False))
+            except Exception:
+                pass
+        return len(text) // 4  # last resort: the usual bytes-per-token rule of thumb
+
+    def _remaining_after(self, new_messages: list[Message]) -> int | None:
+        """Context left once this turn's observations land; None when the nudge is off."""
+        if self._warn_ratio is None or not self._max_context or self._prompt_ids is None:
+            return None
+        used = (len(self._prompt_ids) + len(self._completion_ids or [])
+                + self._observation_estimate(new_messages))
+        return self._max_context - used
+
+    def _warning_text(self, remaining: int) -> str:
         assert self._max_context
-        used = len(self._prompt_ids or []) + len(self._completion_ids or [])
-        # The observation this turn adds is not tokenized yet, so the estimate
-        # runs slightly optimistic — same direction as the apex recipe's.
-        pct = max(0, round((self._max_context - used) / self._max_context * 100))
+        pct = max(0, round(remaining / self._max_context * 100))
         return self._warn_text.replace("{pct}", str(pct))
 
     def metrics(self) -> dict[str, int]:
