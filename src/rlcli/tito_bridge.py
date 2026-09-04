@@ -136,7 +136,10 @@ class BridgingRenderer:
         self._completion_ids: list[int] | None = None
         self._n_messages: int = 0
 
-        # Counters, surfaced as rollout metrics.
+        self._nudged = False
+
+        # Counters. harbor_tito folds these into the episode's final
+        # StepResult.metrics, so they reach the run's metrics.jsonl.
         self.bridged = 0
         self.fell_back = 0
         self.nudges = 0
@@ -164,11 +167,15 @@ class BridgingRenderer:
         # observations that follow it.
         new_messages = messages[self._n_messages + 1 :] if have_state else []
 
-        if new_messages:
+        if new_messages and not self._nudged:
             remaining = self._remaining_after(new_messages)
             if remaining is not None and remaining <= self._warn_ratio * self._max_context:
                 if append_budget_warning(new_messages, self._warning_text(remaining)):
+                    # Once per episode. The reference re-appends every step
+                    # under threshold; six ~40-token notices near the end burn
+                    # the budget the nudge exists to save, so we diverge here.
                     self.nudges += 1
+                    self._nudged = True
 
         # ``kwargs`` means a caller wants non-default rendering; don't try to
         # reproduce that through the bridge, just re-render.
@@ -295,8 +302,17 @@ class BridgingRenderer:
         return getattr(self._inner, name)
 
 
-def prime_renderer_for(model_name: str, tokenizer: Any) -> Any | None:
+def prime_renderer_for(model_name: str, tokenizer: Any, renderer_name: str | None = None) -> Any | None:
     """Build a PrimeIntellect renderer for ``model_name``, or ``None``.
+
+    ``renderer_name`` is the cookbook renderer the tenant chose. It must be
+    honoured: the cookbook renders turn 1 and every fallback turn, Prime
+    renders every bridged turn, and if they disagree about thinking polarity
+    (``qwen3_5`` opens ``<think>``; ``qwen3_5_disable_thinking`` closes it) the
+    prompt format flips back and forth inside one trained episode with nothing
+    to flag it — the prefix contract still holds. Only the default and the
+    one known disable-thinking variant are mapped; anything else refuses to
+    bridge rather than guess.
 
     Returns ``None`` when the package is missing or the model has no hand-written
     renderer — Prime's ``DefaultRenderer`` always refuses to bridge, so there is
@@ -310,8 +326,17 @@ def prime_renderer_for(model_name: str, tokenizer: Any) -> Any | None:
         logger.info("renderers not installed; TITO bridging disabled")
         return None
 
+    config = None
+    if renderer_name and renderer_name not in ("qwen3_5",):
+        if renderer_name == "qwen3_5_disable_thinking":
+            from renderers.configs import Qwen35RendererConfig
+            config = Qwen35RendererConfig(enable_thinking=False)
+        else:
+            print(f"[tito] renderer_name={renderer_name!r} has no Prime mapping; bridging disabled "
+                  "so the prompt format cannot alternate mid-episode")
+            return None
     try:
-        renderer = create_renderer(tokenizer)
+        renderer = create_renderer(tokenizer, config=config)
     except Exception:
         logger.warning("could not build a Prime renderer for %s", model_name, exc_info=True)
         return None
@@ -324,4 +349,6 @@ def prime_renderer_for(model_name: str, tokenizer: Any) -> Any | None:
         )
         return None
     logger.info("TITO bridging enabled for %s via %s", model_name, type(renderer).__name__)
+    print(f"[tito] bridging enabled for {model_name} via {type(renderer).__name__}"
+          + (f" ({renderer_name})" if renderer_name else ""))
     return renderer

@@ -282,6 +282,61 @@ def test_a_large_observation_counts_toward_the_budget(inner, prime, tokenizer):
     assert renderer.nudges == 1, "a ~3k-token observation must pull the nudge forward"
 
 
+def test_the_nudge_fires_once_per_episode(inner, prime, tokenizer):
+    """Diverges from the reference on purpose: repeated notices burn the budget."""
+    renderer = make(inner, prime, max_context_tokens=400, budget_warning_ratio=0.95)
+    _, messages = drive(renderer, tokenizer, turns=4)
+    assert renderer.nudges == 1
+    assert sum("SYSTEM NOTICE" in str(m.get("content", "")) for m in messages) == 1
+
+
+def test_a_disable_thinking_renderer_name_is_honoured(tokenizer):
+    """Prime must not re-open <think> on bridged turns when the tenant closed it."""
+    from rlcli.tito_bridge import prime_renderer_for
+    r = prime_renderer_for("Qwen/Qwen3.5-9B", tokenizer, "qwen3_5_disable_thinking")
+    assert r is not None
+    p = list(r.render_ids([{"role": "user", "content": "hi"}], add_generation_prompt=True))
+    p = p if isinstance(p[0], int) else list(p.token_ids)
+    assert tokenizer.decode(p).endswith("<think>\n\n</think>\n\n"), "closed think block expected"
+
+
+def test_an_unknown_renderer_name_refuses_to_bridge(tokenizer, capsys):
+    from rlcli.tito_bridge import prime_renderer_for
+    assert prime_renderer_for("Qwen/Qwen3.5-9B", tokenizer, "some_custom_renderer") is None
+    assert "no Prime mapping" in capsys.readouterr().out
+
+
+def test_parse_policy_reaches_the_inner_env_and_metrics_reach_the_step():
+    """install_bridge must use the setter (not the attribute) and fold counters into the terminal step."""
+    import asyncio
+    from types import SimpleNamespace
+    from rlcli.harbor_tito import install_bridge
+
+    class InnerEnv:
+        parse_error_policy = None
+    class Env:
+        def __init__(self):
+            self.message_env = InnerEnv()
+            self.parse_error_policy = None
+            self.renderer = SimpleNamespace(build_generation_prompt=None, parse_response=None)
+        def set_parse_error_policy(self, policy):
+            self.parse_error_policy = policy
+            self.message_env.parse_error_policy = policy
+        async def step(self, action):
+            return SimpleNamespace(episode_done=True, metrics={"reward": 1.0})
+
+    env = Env()
+    async def make_envs(): return [env]
+    builder = SimpleNamespace(make_envs=make_envs, model_name="Qwen/Qwen3.5-9B",
+                              renderer_name=None, max_trajectory_tokens=1000)
+    install_bridge(builder, budget_warning_ratio=None, budget_warning_text=None, parse_error_retries=2)
+    [out] = asyncio.run(builder.make_envs())
+    assert out.message_env.parse_error_policy is not None, "policy never reached the inner env"
+    assert out.message_env.parse_error_policy.max_consecutive == 2
+    result = asyncio.run(out.step([1, 2, 3]))
+    assert "tito_bridged" in result.metrics and result.metrics["reward"] == 1.0
+
+
 def test_no_nudge_while_budget_remains(inner, prime, tokenizer):
     renderer = make(inner, prime, max_context_tokens=200_000, budget_warning_ratio=0.2)
     drive(renderer, tokenizer, turns=4)

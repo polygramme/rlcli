@@ -13,7 +13,7 @@ from rlcli.logprob_guard import (
     ABS_DIFF_KEY,
     BREACH_KEY,
     MAX_DIFF_KEY,
-    SOURCE_KEY,
+    SERVER_PREFIX,
     STD_DIFF_KEY,
     LogprobMismatch,
     abs_diff_metrics,
@@ -163,39 +163,43 @@ def test_the_harvest_hook_captures_metrics_and_passes_the_result_through(rl_trai
     ]
 
 
-def test_the_trainers_number_is_preferred_over_computing_it_here(rl_train):
+def test_the_breach_is_decided_locally_never_by_the_server(rl_train, caplog):
+    """The server averages over prompt tokens too (mask is stripped before
+    forward_backward), so a healthy run reads as a breach there. A high server
+    number with a clean local diff must NOT breach — and vice versa."""
     install(threshold=0.03)
     rl_train._training_logprobs_from_fwd_bwd(
-        FwdBwdResult({"policy/rollout_train_logprobs_abs_diff_mean": 0.012})
-    )
-    # local data would say 0.5; the trainer said 0.012, and the trainer wins
-    d = datum([-1.0, -1.0], [1, 1])
-    metrics = rl_train.compute_kl_sample_train([d], [torch.tensor([-1.5, -0.5])])
-    assert metrics[ABS_DIFF_KEY] == pytest.approx(0.012)
-    assert metrics[SOURCE_KEY] == 1.0
-    assert metrics[BREACH_KEY] == 0.0
-
-
-def test_without_a_trainer_number_we_compute_it_ourselves(rl_train):
-    """Hosted Tinker, or any backend that doesn't emit the family."""
-    install(threshold=0.03)
-    d = datum([-1.0, -1.0], [1, 1])
-    metrics = rl_train.compute_kl_sample_train([d], [torch.tensor([-1.5, -0.5])])
-    assert metrics[ABS_DIFF_KEY] == pytest.approx(0.5)
-    assert metrics[SOURCE_KEY] == 0.0
-    assert metrics[BREACH_KEY] == 1.0
-
-
-def test_a_harvested_breach_is_reported(rl_train, caplog):
-    install(threshold=0.03)
-    rl_train._training_logprobs_from_fwd_bwd(
-        FwdBwdResult({"policy/rollout_train_logprobs_abs_diff_mean": 0.4})
+        FwdBwdResult({"policy/rollout_train_logprobs_abs_diff_mean": 0.4})  # unmasked, alarming
     )
     d = datum([-0.5, -0.5], [1, 1])
     with caplog.at_level("ERROR"):
         metrics = rl_train.compute_kl_sample_train([d], [torch.tensor([-0.5, -0.5])])
+    assert metrics[ABS_DIFF_KEY] == pytest.approx(0.0)
+    assert metrics[BREACH_KEY] == 0.0, "server's unmasked mean must not decide the breach"
+    assert metrics[SERVER_PREFIX + "abs_diff_mean"] == pytest.approx(0.4)
+    assert "disagree" not in caplog.text
+
+
+def test_a_real_local_divergence_breaches_even_when_the_server_looks_fine(rl_train):
+    install(threshold=0.03)
+    rl_train._training_logprobs_from_fwd_bwd(
+        FwdBwdResult({"policy/rollout_train_logprobs_abs_diff_mean": 0.001})
+    )
+    d = datum([-1.0, -1.0], [1, 1])
+    metrics = rl_train.compute_kl_sample_train([d], [torch.tensor([-1.5, -0.5])])
+    assert metrics[ABS_DIFF_KEY] == pytest.approx(0.5)
     assert metrics[BREACH_KEY] == 1.0
-    assert "trainer-reported" in caplog.text
+
+
+def test_reinstall_takes_the_new_threshold_and_drops_stale_batches(rl_train):
+    """A warm container serving a second run must not keep the first run's settings."""
+    install(threshold=0.03)
+    rl_train._training_logprobs_from_fwd_bwd(FwdBwdResult({"policy/rollout_train_logprobs_abs_diff_mean": 9.0}))
+    install(threshold=0.9)  # new run, looser threshold
+    assert logprob_guard._harvested == [], "previous run's batches leaked"
+    d = datum([-1.0, -1.0], [1, 1])
+    metrics = rl_train.compute_kl_sample_train([d], [torch.tensor([-1.5, -0.5])])  # local diff 0.5
+    assert metrics[BREACH_KEY] == 0.0, "0.5 is under the re-installed 0.9"
 
 
 def test_install_preserves_the_cookbooks_own_metrics(rl_train):

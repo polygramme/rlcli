@@ -22,16 +22,19 @@ entirely; only the distillation recipes (``sdft.py``, ``train_off_policy.py``)
 consume it.  So on the RL path the number is computed, transmitted, and thrown
 away.
 
-This module therefore does two things:
+Why the server's number cannot decide the breach
+-----------------------------------------------
+It is averaged over the wrong tokens. ``rl/train.py`` strips ``mask`` from every
+datum before ``forward_backward`` (``_remove_mask``) and sends no ``weights``, so
+the tinker shim defaults weights to all-ones and the backend's ``loss_mask``
+covers prompt and observation tokens too. Those carry a rollout logprob of 0.0
+(``data_processing.py``), so the server's mean is |train logprob| over the
+prompt — whole nats — and a perfectly healthy run breaches on every step.
 
-1. Harvests ``.metrics`` off each forward-backward result, which is free and
-   strictly richer than anything we can compute client-side.
-2. Falls back to computing the mean locally from the datums when the server
-   did not supply it — a different backend, hosted Tinker, or a batch with no
-   rollout logprobs.
-
-Either way the same keys are published and the same threshold is checked, so
-the guard behaves identically no matter which trainer is on the other end.
+So the breach is decided from the local, action-masked computation, always.
+The server family is still harvested and published under ``*_server_*`` keys:
+it is free, it is what the backend's own dashboards show, and the gap between
+the two is itself informative.
 """
 
 from __future__ import annotations
@@ -48,8 +51,8 @@ ABS_DIFF_KEY = "optim/rollout_logprobs_abs_diff_mean"
 MAX_DIFF_KEY = "optim/rollout_logprobs_abs_diff_max"
 STD_DIFF_KEY = "optim/rollout_logprobs_abs_diff_std"
 BREACH_KEY = "optim/rollout_logprobs_breach"
-# 1.0 when the number came from the trainer, 0.0 when we computed it here.
-SOURCE_KEY = "optim/rollout_logprobs_from_server"
+# The backend's own (unmasked, see module docstring) family, for comparison only.
+SERVER_PREFIX = "optim/rollout_logprobs_server_"
 
 # What skyrl_train_backend._extract_metrics emits. The ``:mean`` / ``:max``
 # suffixes drive the SDK's cross-chunk reduction and may or may not survive into
@@ -60,6 +63,10 @@ _SERVER_STEM = "policy/rollout_train_logprobs_abs_diff"
 class LogprobMismatch(RuntimeError):
     """Raised in strict mode when trainer and sampler logprobs diverge."""
 
+
+# Live settings, read at call time so a re-install on a reused container
+# takes effect without re-wrapping.
+_cfg: dict[str, Any] = {"threshold": DEFAULT_THRESHOLD, "strict": False}
 
 # Forward-backward metrics harvested since the last training step. The RL loop
 # is sequential -- every forward_backward for a step completes before
@@ -158,7 +165,13 @@ def install(threshold: float = DEFAULT_THRESHOLD, *, strict: bool = False) -> bo
     if original is None or harvest_target is None:
         logger.warning("cookbook hooks not found; logprob guard not installed")
         return False
+    # Re-installing (a warm Modal container serving a second run) must take the
+    # new threshold/strict and must not carry the previous run's harvested
+    # batches into this one's first step.
+    _cfg.update(threshold=threshold, strict=strict)
+    _harvested.clear()
     if getattr(original, "_pg_logprob_guard", False):
+        logger.info("logprob guard re-armed (threshold %s, strict=%s)", threshold, strict)
         return True
 
     def harvesting(fwd_bwd_result):
@@ -175,30 +188,31 @@ def install(threshold: float = DEFAULT_THRESHOLD, *, strict: bool = False) -> bo
 
     def guarded(data_D, training_logprobs_D):
         metrics = dict(original(data_D, training_logprobs_D))
+        # Informational: the backend's unmasked family, under its own keys.
         try:
-            extra = server_metrics()
-            from_server = bool(extra)
-            if not from_server:
-                extra = abs_diff_metrics(data_D, training_logprobs_D)
+            for k, v in server_metrics().items():
+                metrics[k.replace("optim/rollout_logprobs_", SERVER_PREFIX, 1)] = v
+        except Exception:
+            logger.debug("server logprob family unavailable", exc_info=True)
+            _harvested.clear()
+        # Decisive: the action-masked local computation.
+        try:
+            extra = abs_diff_metrics(data_D, training_logprobs_D)
         except Exception:
             logger.warning("logprob abs-diff metric failed", exc_info=True)
-            _harvested.clear()
             return metrics
-
         if not extra:
             return metrics
 
         metrics.update(extra)
-        metrics[SOURCE_KEY] = 1.0 if from_server else 0.0
         mean = extra[ABS_DIFF_KEY]
-
+        threshold, strict = _cfg["threshold"], _cfg["strict"]
         breached = mean > threshold
         metrics[BREACH_KEY] = 1.0 if breached else 0.0
         if breached:
             message = (
                 f"trainer and sampler logprobs disagree: mean |diff| {mean:.4f} "
-                f"over action tokens, above the {threshold} healthy threshold "
-                f"({'trainer-reported' if from_server else 'computed locally'}). "
+                f"over action tokens, above the {threshold} healthy threshold. "
                 "Suspect the token pipeline before the optimizer."
             )
             if strict:

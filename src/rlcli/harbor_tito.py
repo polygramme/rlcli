@@ -61,11 +61,32 @@ def make_parse_error_policy(max_consecutive: int):
 _PRIME: dict[str, Any] = {}
 
 
-def _prime_for(model_name: str):
-    if model_name not in _PRIME:
+def _prime_for(model_name: str, renderer_name: str | None):
+    key = (model_name, renderer_name)
+    if key not in _PRIME:
         tokenizer = tokenizer_utils.get_tokenizer(model_name)
-        _PRIME[model_name] = prime_renderer_for(model_name, tokenizer)
-    return _PRIME[model_name]
+        _PRIME[key] = prime_renderer_for(model_name, tokenizer, renderer_name)
+    return _PRIME[key]
+
+
+def _surface_bridge_metrics(env) -> None:
+    """Fold the bridge's counters into the episode's final StepResult.metrics.
+
+    That is the one seam the cookbook aggregates into the run's metrics.jsonl,
+    so a run that re-renders every turn (bridge refused, unknown renderer,
+    contract violation) is visible in the dashboard instead of only in a
+    counter nothing reads. Reported once, on the terminal step, so each
+    episode contributes its totals exactly once.
+    """
+    renderer, orig_step = env.renderer, env.step
+
+    async def step(action, *args, **kwargs):
+        result = await orig_step(action, *args, **kwargs)
+        if result.episode_done:
+            result.metrics.update(renderer.metrics())
+        return result
+
+    env.step = step
 
 
 def install_bridge(
@@ -84,18 +105,24 @@ def install_bridge(
         if parse_error_retries > 0:
             policy = make_parse_error_policy(parse_error_retries)
             for env in envs:
-                # Plain attribute on EnvFromMessageEnv, same as `renderer`; it is
-                # not plumbed through rl_train.Config, so we set it here.
-                env.parse_error_policy = policy
+                # Not a plain attribute: EnvFromMessageEnv.set_parse_error_policy
+                # pushes the policy down to the inner AgentToolMessageEnv, which
+                # is where malformed tool calls are actually handled. Setting the
+                # outer attribute alone delivered zero retries while still
+                # changing the outer env's structural-failure reward.
+                env.set_parse_error_policy(policy)
 
-        prime = _prime_for(builder.model_name)
+        prime = _prime_for(builder.model_name, builder.renderer_name)
         if prime is None:
-            # No hand-written renderer for this model: leave the group exactly as
-            # the cookbook built it. Every turn re-renders, which is today's
-            # behaviour, and the nudge goes with it (it is only safe to inject
-            # inside an observation the bridge is going to keep appending to).
-            return envs
+            # Driver log, not the cookbook's logs.log: this is the line an
+            # operator needs when a run is unexpectedly 4x more expensive.
+            print(f"[tito] no Prime renderer for {builder.model_name!r} "
+                  f"(renderer_name={builder.renderer_name!r}); every turn will re-render. "
+                  "The wrap-up nudge still applies.")
         for env in envs:
+            # prime=None keeps the nudge and the fallback path; the bridge simply
+            # never fires. The nudge is a tool-message append and is safe with
+            # or without bridging.
             env.renderer = BridgingRenderer(
                 env.renderer,
                 prime,
@@ -103,6 +130,7 @@ def install_bridge(
                 budget_warning_ratio=budget_warning_ratio,
                 budget_warning_text=budget_warning_text,
             )
+            _surface_bridge_metrics(env)
         return envs
 
     builder.make_envs = make_envs

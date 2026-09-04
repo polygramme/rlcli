@@ -30,6 +30,9 @@ def _docker_available() -> bool:
         return False
 
 
+# trylast: run after pytest's own -m/-k deselection, so a filtered run that
+# keeps no docker-marked item never pays the `docker info` round trip.
+@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config, items):
     if not any(item.get_closest_marker("docker") for item in items):
         return
