@@ -26,6 +26,10 @@ train = [
     # harbor_rl imports ModalSandbox at module level, so the modal SDK must be
     # installed even when using rlcli's local Docker sandbox (no account needed).
     "modal",
+    # Token-in/token-out rollouts (rlcli/tito_bridge.py). Torch-free. Optional
+    # at runtime: without it prime_renderer_for() returns None and every turn
+    # re-renders, which is the pre-bridge behaviour.
+    "renderers>=0.1.11",
 ]
 dev = ["pytest>=8"]
 # Polygramme Cloud proxy (cloud/pg_proxy.py) + its contract tests.
