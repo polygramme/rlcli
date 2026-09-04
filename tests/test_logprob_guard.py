@@ -13,10 +13,21 @@ from rlcli.logprob_guard import (
     ABS_DIFF_KEY,
     BREACH_KEY,
     MAX_DIFF_KEY,
+    SOURCE_KEY,
+    STD_DIFF_KEY,
     LogprobMismatch,
     abs_diff_metrics,
     install,
+    server_metrics,
 )
+
+
+class FwdBwdResult:
+    """Stand-in for tinker.ForwardBackwardOutput."""
+
+    def __init__(self, metrics=None):
+        self.metrics = metrics or {}
+        self.loss_fn_outputs = []
 
 
 def datum(sampling: list[float], mask: list[float]) -> tinker.Datum:
@@ -78,8 +89,113 @@ def test_a_fully_masked_datum_is_skipped():
 def rl_train():
     rl_train = pytest.importorskip("tinker_cookbook.rl.train")
     original = rl_train.compute_kl_sample_train
+    original_harvest = rl_train._training_logprobs_from_fwd_bwd
+    logprob_guard._harvested.clear()
     yield rl_train
     rl_train.compute_kl_sample_train = original
+    rl_train._training_logprobs_from_fwd_bwd = original_harvest
+    logprob_guard._harvested.clear()
+
+
+# --------------------------------------------------------------------------
+# harvesting the trainer's own numbers
+# --------------------------------------------------------------------------
+
+
+def test_server_metrics_are_read_with_or_without_the_reduction_suffix():
+    """_extract_metrics emits ':mean'/':max' suffixes that may not survive the SDK."""
+    stem = "policy/rollout_train_logprobs_abs_diff"
+    logprob_guard._harvested.append({f"{stem}_mean": 0.011, f"{stem}_max": 0.4})
+    plain = server_metrics()
+    logprob_guard._harvested.append({f"{stem}_mean:mean": 0.011, f"{stem}_max:max": 0.4})
+    suffixed = server_metrics()
+    assert plain == suffixed == {ABS_DIFF_KEY: pytest.approx(0.011), MAX_DIFF_KEY: pytest.approx(0.4)}
+
+
+def test_several_forward_backwards_reduce_into_one_step():
+    """Means average, maxima max -- the reduction the backend already applies."""
+    stem = "policy/rollout_train_logprobs_abs_diff"
+    logprob_guard._harvested.extend(
+        [
+            {f"{stem}_mean": 0.010, f"{stem}_max": 0.2, f"{stem}_std": 0.004},
+            {f"{stem}_mean": 0.020, f"{stem}_max": 0.9, f"{stem}_std": 0.006},
+        ]
+    )
+    out = server_metrics()
+    assert out[ABS_DIFF_KEY] == pytest.approx(0.015)
+    assert out[MAX_DIFF_KEY] == pytest.approx(0.9)
+    assert out[STD_DIFF_KEY] == pytest.approx(0.005)
+
+
+def test_draining_leaves_nothing_for_the_next_step():
+    logprob_guard._harvested.append({"policy/rollout_train_logprobs_abs_diff_mean": 0.01})
+    assert server_metrics()
+    assert server_metrics() == {}
+
+
+def test_the_harvest_buffer_is_bounded(rl_train):
+    """A path that forward-backwards without ever draining must not grow forever."""
+    install()
+    for i in range(logprob_guard._MAX_HARVEST + 50):
+        rl_train._training_logprobs_from_fwd_bwd(
+            FwdBwdResult({"policy/rollout_train_logprobs_abs_diff_mean": float(i)})
+        )
+    assert len(logprob_guard._harvested) == logprob_guard._MAX_HARVEST
+    # and it kept the newest, not the oldest
+    assert logprob_guard._harvested[-1] == {
+        "policy/rollout_train_logprobs_abs_diff_mean": float(logprob_guard._MAX_HARVEST + 49)
+    }
+
+
+def test_unrelated_metrics_are_ignored():
+    logprob_guard._harvested.append({"total_loss:sum": 1.0, "entropy_loss:sum": 0.2})
+    assert server_metrics() == {}
+
+
+def test_the_harvest_hook_captures_metrics_and_passes_the_result_through(rl_train):
+    install()
+    seen = rl_train._training_logprobs_from_fwd_bwd(
+        FwdBwdResult({"policy/rollout_train_logprobs_abs_diff_mean": 0.012})
+    )
+    assert seen == []  # the wrapped function still runs and returns its value
+    assert logprob_guard._harvested == [
+        {"policy/rollout_train_logprobs_abs_diff_mean": 0.012}
+    ]
+
+
+def test_the_trainers_number_is_preferred_over_computing_it_here(rl_train):
+    install(threshold=0.03)
+    rl_train._training_logprobs_from_fwd_bwd(
+        FwdBwdResult({"policy/rollout_train_logprobs_abs_diff_mean": 0.012})
+    )
+    # local data would say 0.5; the trainer said 0.012, and the trainer wins
+    d = datum([-1.0, -1.0], [1, 1])
+    metrics = rl_train.compute_kl_sample_train([d], [torch.tensor([-1.5, -0.5])])
+    assert metrics[ABS_DIFF_KEY] == pytest.approx(0.012)
+    assert metrics[SOURCE_KEY] == 1.0
+    assert metrics[BREACH_KEY] == 0.0
+
+
+def test_without_a_trainer_number_we_compute_it_ourselves(rl_train):
+    """Hosted Tinker, or any backend that doesn't emit the family."""
+    install(threshold=0.03)
+    d = datum([-1.0, -1.0], [1, 1])
+    metrics = rl_train.compute_kl_sample_train([d], [torch.tensor([-1.5, -0.5])])
+    assert metrics[ABS_DIFF_KEY] == pytest.approx(0.5)
+    assert metrics[SOURCE_KEY] == 0.0
+    assert metrics[BREACH_KEY] == 1.0
+
+
+def test_a_harvested_breach_is_reported(rl_train, caplog):
+    install(threshold=0.03)
+    rl_train._training_logprobs_from_fwd_bwd(
+        FwdBwdResult({"policy/rollout_train_logprobs_abs_diff_mean": 0.4})
+    )
+    d = datum([-0.5, -0.5], [1, 1])
+    with caplog.at_level("ERROR"):
+        metrics = rl_train.compute_kl_sample_train([d], [torch.tensor([-0.5, -0.5])])
+    assert metrics[BREACH_KEY] == 1.0
+    assert "trainer-reported" in caplog.text
 
 
 def test_install_preserves_the_cookbooks_own_metrics(rl_train):
