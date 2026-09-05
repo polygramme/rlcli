@@ -55,11 +55,6 @@ Measured, with receipts in [`benchmarks/`](benchmarks/):
 - `rlcli checkpoint / run / session` pass through to the official tinker CLI, pointed at your server.
 - Everything stays in your environment: traces, data, training, weights.
 
-## Polygramme Cloud (hosted trainers)
-
-The same server, on GPUs we run: [polygramme.com/cloud](https://polygramme.com/cloud).
-Polygramme Cloud (the hosted trainers, proxy and runs control plane) lives in a separate private repository; this package is what it installs.
-
 ## Dataset format (`train sl`)
 
 One JSON object per line:
