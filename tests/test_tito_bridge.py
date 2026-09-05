@@ -436,3 +436,65 @@ def test_surface_metrics_merges_recorder_counters_and_error_flag():
     Rec.metrics = lambda self: {"errors/parse_episode": 1.0}
     Result.metrics = {}
     assert asyncio.run(env.step(None)).metrics["errors/any"] == 1.0
+
+
+def test_sandbox_timing_and_grader_duration_reach_the_terminal_metrics():
+    import asyncio
+    from rlcli import harbor_tito as ht
+
+    class Reward:
+        async def __call__(self, history):
+            await asyncio.sleep(0.01)
+            return 1.0, {}
+
+    assert ht.patch_timed_reward(Reward) and not ht.patch_timed_reward(Reward)
+
+    class Result:
+        def __init__(self, done):
+            self.episode_done, self.metrics = done, {}
+
+    class Env:
+        def __init__(self):
+            self.renderer = type("R", (), {"metrics": lambda self: {}})()
+            self.n = 0
+
+        async def step(self, action):
+            self.n += 1
+            if self.n == 2:
+                await Reward()([])  # grading happens inside the terminal step
+            return Result(self.n == 2)
+
+    class Builder:
+        def __init__(self):
+            self.calls = 0
+
+        async def sandbox_factory(self, env_dir, timeout):
+            self.calls += 1
+            await asyncio.sleep(0.005)
+            if self.calls == 3:
+                raise RuntimeError("image build failed")
+            return object()
+
+        async def make_envs(self):
+            envs = []
+            for _ in range(2):
+                await self.sandbox_factory("d", 1)
+                envs.append(Env())
+            return envs
+
+    b = Builder()
+    ht.time_sandboxes(b)
+    assert getattr(b.sandbox_factory, "_pg_timed", False)
+    envs = asyncio.run(b.make_envs())
+    stats = b._pg_sandbox_stats
+    assert len(stats["create_s"]) == 2 and all(d >= 0.005 for d in stats["create_s"]) and stats["failed"] == 0
+    # simulate what install_bridge does after make_envs
+    for i, env in enumerate(envs):
+        env._pg_sandbox = {"create_s": stats["create_s"][i], "failed_in_group": stats["failed"]}
+        ht._surface_bridge_metrics(env)
+    asyncio.run(envs[0].step(None))
+    m = asyncio.run(envs[0].step(None)).metrics
+    assert m["grader/duration_s"] >= 0.01 and m["sandbox/create_s"] >= 0.005 and m["sandbox/failed_in_group"] == 0.0
+    with pytest.raises(RuntimeError):
+        asyncio.run(b.sandbox_factory("d", 1))
+    assert stats["failed"] == 1

@@ -13,6 +13,9 @@ every time upstream adds a field.
 
 from __future__ import annotations
 
+import contextvars
+import time
+
 import logging
 from typing import Any
 
@@ -26,6 +29,41 @@ from tinker_cookbook.recipes.harbor_rl.harbor_env import (
 from rlcli.tito_bridge import BridgingRenderer, prime_renderer_for
 
 logger = logging.getLogger(__name__)
+
+
+# Grader (test.sh) duration per episode. HarborReward is built per env deep
+# inside make_envs, so its __call__ is timed once at the class and the value
+# handed back through a ContextVar that the terminal step wrapper sets.
+_GRADER: contextvars.ContextVar[dict | None] = contextvars.ContextVar("pg_grader", default=None)
+
+
+def patch_timed_reward(cls) -> bool:
+    """Time cls.__call__ (async) and report it via _GRADER. Idempotent."""
+    orig = cls.__call__
+    if getattr(orig, "_pg_timed", False):
+        return False
+
+    async def timed(self, *a, **kw):
+        t0 = time.monotonic()
+        try:
+            return await orig(self, *a, **kw)
+        finally:
+            holder = _GRADER.get()
+            if holder is not None:
+                holder["grader_s"] = time.monotonic() - t0
+
+    timed._pg_timed = True  # type: ignore[attr-defined]
+    cls.__call__ = timed
+    return True
+
+
+def _patch_harbor_reward() -> None:
+    try:
+        from tinker_cookbook.recipes.harbor_rl.harbor_tools import HarborReward
+
+        patch_timed_reward(HarborReward)
+    except Exception:  # noqa: BLE001 - optional; metrics just stay absent
+        pass
 
 
 def make_parse_error_policy(max_consecutive: int):
@@ -81,9 +119,20 @@ def _surface_bridge_metrics(env) -> None:
     renderer, orig_step = env.renderer, env.step
 
     async def step(action, *args, **kwargs):
-        result = await orig_step(action, *args, **kwargs)
+        holder: dict = {}
+        token = _GRADER.set(holder)
+        try:
+            result = await orig_step(action, *args, **kwargs)
+        finally:
+            _GRADER.reset(token)
         if result.episode_done:
             result.metrics.update(renderer.metrics())
+            if "grader_s" in holder:
+                result.metrics["grader/duration_s"] = float(holder["grader_s"])
+            sb = getattr(env, "_pg_sandbox", None)
+            if sb:
+                result.metrics["sandbox/create_s"] = float(sb.get("create_s") or 0.0)
+                result.metrics["sandbox/failed_in_group"] = float(sb.get("failed_in_group") or 0)
             rec = getattr(env, "_pg_recorder", None)
             if rec is not None:
                 try:
@@ -99,6 +148,29 @@ def _surface_bridge_metrics(env) -> None:
     env.step = step
 
 
+def time_sandboxes(builder) -> None:
+    """Wrap builder.sandbox_factory to record creation time per sandbox and
+    failures per group (builder._pg_sandbox_stats). Idempotent."""
+    factory = getattr(builder, "sandbox_factory", None)
+    if factory is None or getattr(factory, "_pg_timed", False):
+        return
+    stats = {"create_s": [], "failed": 0}
+    builder._pg_sandbox_stats = stats
+
+    async def timed(env_dir, timeout, *a, **kw):
+        t0 = time.monotonic()
+        try:
+            sb = await factory(env_dir, timeout, *a, **kw)
+        except Exception:
+            stats["failed"] += 1
+            raise
+        stats["create_s"].append(time.monotonic() - t0)
+        return sb
+
+    timed._pg_timed = True  # type: ignore[attr-defined]
+    builder.sandbox_factory = timed
+
+
 def install_bridge(
     builder: HarborEnvGroupBuilder,
     *,
@@ -108,6 +180,8 @@ def install_bridge(
 ) -> None:
     """Make ``builder.make_envs`` hand back envs with bridging renderers."""
     original_make_envs = builder.make_envs
+    _patch_harbor_reward()
+    time_sandboxes(builder)
 
     async def make_envs():
         envs = await original_make_envs()
@@ -116,8 +190,12 @@ def install_bridge(
         # counts on the renderer and the terminal StepResult on env.step.
         from rlcli import atif
 
+        stats = getattr(builder, "_pg_sandbox_stats", None) or {}
         for traj_idx, env in enumerate(envs):
             atif.install_recorder(env, traj_idx=traj_idx, model_name=getattr(builder, "model_name", None))
+            durations = stats.get("create_s") or []
+            env._pg_sandbox = {"create_s": durations[traj_idx] if traj_idx < len(durations) else None,
+                               "failed_in_group": stats.get("failed", 0)}
 
         if parse_error_retries > 0:
             policy = make_parse_error_policy(parse_error_retries)
