@@ -4,7 +4,8 @@ Wires the cookbook's ``capture`` instrumentation (tinker_cookbook/capture) into
 a run without its local SQLite daemon: every sampled sequence — prompt tokens,
 sampled tokens, logprobs, run coordinates — is appended as one JSON line under
 the run's Volume directory and summarised as one ``traces`` row in the store
-(rlcli.store). The Volume line is the payload; the row is what you filter on.
+(any object with an ``insert(table, rows, returning=False)`` method; Polygramme
+Cloud passes its Postgres client). The Volume line is the payload; the row is what you filter on.
 Both survive the container; neither is on the training path (the exporter is
 a bounded background queue that drops rather than blocks).
 

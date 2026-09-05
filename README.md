@@ -58,14 +58,7 @@ Measured, with receipts in [`benchmarks/`](benchmarks/):
 ## Polygramme Cloud (hosted trainers)
 
 The same server, on GPUs we run: [polygramme.com/cloud](https://polygramme.com/cloud).
-`rlcli/cloud/` holds the two Modal apps (`trainer_app.py` = dedicated GPU,
-`shared_app.py` = multi-tenant LoRA) and the product proxy they share
-(`pg_proxy.py`: console keys, per-key ownership, metering, signed downloads,
-merged full-weight export, and an OpenAI-compatible `/v1/chat/completions`
-over any sampler checkpoint you own). Point any command at it with
-`--base-url` and a console key; get the weights back with `/pg/checkpoints`.
-Guide: [docs.polygramme.com/guides/cloud](https://docs.polygramme.com/guides/cloud).
-Contract tests: `uv pip install -e ".[cloud,dev]" && pytest tests/test_pg_proxy.py`.
+Polygramme Cloud (the hosted trainers, proxy and runs control plane) lives in a separate private repository; this package is what it installs.
 
 ## Dataset format (`train sl`)
 

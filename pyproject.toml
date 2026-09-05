@@ -32,8 +32,6 @@ train = [
     "renderers>=0.1.11",
 ]
 dev = ["pytest>=8"]
-# Polygramme Cloud proxy (cloud/pg_proxy.py) + its contract tests.
-cloud = ["fastapi", "uvicorn", "httpx", "transformers", "numpy"]
 # Live pulls with `rlcli import --project` (file-based langsmith import needs nothing).
 langsmith = ["langsmith"]
 
