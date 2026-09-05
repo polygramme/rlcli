@@ -101,6 +101,13 @@ def install_bridge(
 
     async def make_envs():
         envs = await original_make_envs()
+        # ATIF trajectory per episode when a sink is configured (rlcli.atif).
+        # Installed before the bridge so the recorder sees the bridge's token
+        # counts on the renderer and the terminal StepResult on env.step.
+        from rlcli import atif
+
+        for traj_idx, env in enumerate(envs):
+            atif.install_recorder(env, traj_idx=traj_idx, model_name=getattr(builder, "model_name", None))
 
         if parse_error_retries > 0:
             policy = make_parse_error_policy(parse_error_retries)
