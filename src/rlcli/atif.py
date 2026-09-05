@@ -316,6 +316,25 @@ class TrajectoryRecorder:
         return traj
 
 
+def trajectory_text(traj: dict, *, limit: int = 65536) -> str:
+    """Searchable plain text of an episode: every message, tool call and
+    observation in order, capped at `limit` characters."""
+    parts: list[str] = []
+    for s in traj.get("steps") or []:
+        src = s.get("source", "")
+        msg = s.get("message")
+        if msg:
+            parts.append(f"[{src}] {msg if isinstance(msg, str) else json.dumps(msg)}")
+        for c in s.get("tool_calls") or []:
+            parts.append(f"[tool:{c.get('function_name')}] {json.dumps(c.get('arguments') or {})}")
+        for r in (s.get("observation") or {}).get("results") or []:
+            c = r.get("content")
+            if c:
+                parts.append(f"[result] {c if isinstance(c, str) else json.dumps(c)}")
+    text = "\n".join(parts)
+    return text if len(text) <= limit else text[:limit]
+
+
 def _rlcli_version() -> str:
     try:
         from importlib.metadata import version
@@ -400,6 +419,7 @@ class FileSink(TrajectorySink):
                     "duration_s": ex.get("duration_s"),
                     "prompt_tokens": fm.get("total_prompt_tokens"),
                     "completion_tokens": fm.get("total_completion_tokens"),
+                    "text": trajectory_text(trajectory),
                 })
             except Exception:  # noqa: BLE001
                 log.exception("atif: on_written failed")

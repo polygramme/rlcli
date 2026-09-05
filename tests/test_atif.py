@@ -171,3 +171,16 @@ def test_recorder_counts_tool_calls_and_parse_errors_for_metrics():
 
     asyncio.run(run())
     assert rec.metrics() == {"tools/calls": 3.0, "tools/bash": 2.0, "tools/read_file": 1.0, "errors/parse_calls": 1.0, "errors/parse_episode": 1.0}
+
+
+def test_trajectory_text_and_sink_record_text(tmp_path):
+    traj = {"steps": [{"source": "user", "message": "fix the build"},
+                      {"source": "agent", "message": "ok", "tool_calls": [{"function_name": "bash", "arguments": {"cmd": "make"}}],
+                       "observation": {"results": [{"content": "error: missing semicolon"}]}}]}
+    text = atif.trajectory_text(traj)
+    assert text == "[user] fix the build\n[agent] ok\n[tool:bash] {\"cmd\": \"make\"}\n[result] error: missing semicolon"
+    assert len(atif.trajectory_text(traj, limit=10)) == 10
+    written = []
+    sink = atif.FileSink(str(tmp_path), on_written=written.append)
+    sink.write({"trajectory_id": "x", "steps": traj["steps"], "extra": {}, "final_metrics": {}})
+    assert written[0]["text"].startswith("[user] fix the build")

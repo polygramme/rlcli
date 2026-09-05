@@ -262,3 +262,36 @@ def test_a_metric_failure_never_breaks_training(rl_train, monkeypatch, caplog):
     assert "optim/kl_sample_train_v1" in metrics
     assert ABS_DIFF_KEY not in metrics
     assert "abs-diff metric failed" in caplog.text
+
+
+
+def test_dump_datums_writes_token_level_records(tmp_path):
+    import json
+    from rlcli import logprob_guard as lg
+
+    class Arr:
+        def __init__(self, v): self.v = v
+        def to_torch(self):
+            import torch
+            return torch.tensor(self.v)
+
+    class MI:
+        def __init__(self, ids): self.ids = ids
+        def to_ints(self): return self.ids
+
+    class Datum:
+        def __init__(self, ids, lp, mask):
+            self.model_input = MI(ids)
+            self.loss_fn_inputs = {"logprobs": Arr(lp), "mask": Arr(mask)}
+
+    import torch
+    lg.configure_dump(str(tmp_path / "lp"))
+    n = lg.dump_datums([Datum([1, 2, 3, 4], [-0.1, -0.2, -0.3], [0, 1, 1]), Datum([9], [], [])], [torch.tensor([-0.15, -0.25, -0.35]), torch.tensor([])])
+    assert n == 2
+    lines = [json.loads(l) for l in open(tmp_path / "lp" / "lp_000000.jsonl")]
+    assert lines[0]["tokens"] == [1, 2, 3, 4] and lines[0]["offset"] == 1 and lines[0]["mask"] == [0, 1, 1]
+    assert lines[0]["sample_lp"] == [-0.1, -0.2, -0.3] and lines[0]["train_lp"] == [-0.15, -0.25, -0.35]
+    lg.dump_datums([], [])
+    assert (tmp_path / "lp" / "lp_000001.jsonl").exists()
+    lg.configure_dump(None)
+    assert lg.dump_datums([Datum([1], [], [])], [torch.tensor([])]) == 0

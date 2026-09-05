@@ -39,6 +39,9 @@ the two is itself informative.
 
 from __future__ import annotations
 
+import json
+import os
+
 import logging
 from typing import Any
 
@@ -141,7 +144,61 @@ def abs_diff_metrics(data_D: list[Any], training_logprobs_D: list[Any]) -> dict[
     }
 
 
-def install(threshold: float = DEFAULT_THRESHOLD, *, strict: bool = False) -> bool:
+_DUMP: dict[str, Any] = {"dir": None, "n": 0}
+
+
+def configure_dump(dump_dir: str | None) -> None:
+    """Write every datum's tokens, sampler logprobs, trainer logprobs and action
+    mask under dump_dir (one JSON line per datum). Off when None."""
+    _DUMP["dir"] = dump_dir
+    _DUMP["n"] = 0
+    if dump_dir:
+        os.makedirs(dump_dir, exist_ok=True)
+
+
+def _datum_tokens(datum: Any) -> list[int] | None:
+    mi = getattr(datum, "model_input", None)
+    if mi is None:
+        return None
+    try:
+        return [int(t) for t in mi.to_ints()]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def dump_datums(data_D: list[Any], training_logprobs_D: list[Any]) -> int:
+    """Token-level record per datum for the console's divergence view.
+    Never raises; returns how many were written."""
+    d = _DUMP["dir"]
+    if not d:
+        return 0
+    written = 0
+    path = os.path.join(d, f"lp_{_DUMP['n']:06d}.jsonl")
+    try:
+        with open(path, "w") as f:
+            for datum, train_lp in zip(data_D, training_logprobs_D):
+                inputs = getattr(datum, "loss_fn_inputs", {}) or {}
+                if "logprobs" not in inputs or "mask" not in inputs:
+                    continue
+                tokens = _datum_tokens(datum)
+                if tokens is None:
+                    continue
+                sample = inputs["logprobs"].to_torch().tolist()
+                mask = [int(m > 0) for m in inputs["mask"].to_torch().tolist()]
+                train = train_lp.tolist() if hasattr(train_lp, "tolist") else list(train_lp)
+                # logprobs are for tokens[1:] (next-token); pad to token length.
+                off = len(tokens) - len(sample)
+                rec = {"tokens": tokens, "offset": off, "sample_lp": [round(x, 5) for x in sample],
+                       "train_lp": [round(float(x), 5) for x in train], "mask": mask}
+                f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+                written += 1
+        _DUMP["n"] += 1
+    except Exception:  # noqa: BLE001
+        logger.exception("logprob dump failed")
+    return written
+
+
+def install(threshold: float = DEFAULT_THRESHOLD, *, strict: bool = False, dump_dir: str | None = None) -> bool:
     """Publish the abs-diff family on every training step and check it.
 
     ``strict`` decides what a breach costs.  The default is to log at ERROR and
@@ -186,8 +243,13 @@ def install(threshold: float = DEFAULT_THRESHOLD, *, strict: bool = False) -> bo
             logger.debug("could not harvest forward-backward metrics", exc_info=True)
         return harvest_target(fwd_bwd_result)
 
+    configure_dump(dump_dir)
+
     def guarded(data_D, training_logprobs_D):
         metrics = dict(original(data_D, training_logprobs_D))
+        if _DUMP["dir"]:
+            n = dump_datums(data_D, training_logprobs_D)
+            metrics["optim/logprob_dump_datums"] = float(n)
         # Informational: the backend's unmasked family, under its own keys.
         try:
             for k, v in server_metrics().items():
