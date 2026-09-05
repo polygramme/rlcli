@@ -233,3 +233,44 @@ def test_sink_retries_without_task_hash_when_the_store_rejects_it(tmp_path):
     assert sink.task_hash_fallbacks == 1 and sink.store_failures == 0
     assert [r["task_hash"] for r in store.inserts[0][1]] == [None, None]
     assert sink.rows == 2
+
+
+def test_eval_stamping_keeps_task_identity_but_not_batch_coords(tmp_path):
+    from tinker_cookbook.capture import capture
+    from tinker_cookbook.capture.scope import current_scope
+    from tinker_cookbook.rl import rollouts
+
+    d = tmp_path / "task"
+    d.mkdir()
+    (d / "instruction.md").write_text("do it")
+
+    class Inner:
+        def get_batch(self, i):
+            return [Builder("alpha", task_dir=d)]
+
+        def __len__(self):
+            return 3
+
+    ds = tc.StampingDataset(Inner(), batch_coords=False)
+    (b,) = ds.get_batch(2)
+    coords = getattr(b, tc.COORDS_ATTR)
+    assert "iteration" not in coords and "group_idx" not in coords
+    assert coords["task"] == "alpha" and len(coords["task_hash"]) == 64
+
+    seen = []
+
+    async def fake(builder, policy):
+        seen.append(dict(current_scope()))
+        return "g"
+
+    original = rollouts.do_group_rollout
+    rollouts.do_group_rollout = fake
+    try:
+        restore = tc.install_rollout_tags()
+        with capture(split="eval/test", iteration=7):
+            asyncio.run(rollouts.do_group_rollout(b, None))
+        restore()
+    finally:
+        rollouts.do_group_rollout = original
+    assert seen[0]["iteration"] == 7 and seen[0]["split"] == "eval/test"
+    assert seen[0]["task_hash"] == coords["task_hash"] and seen[0]["task"] == "alpha"

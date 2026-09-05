@@ -169,6 +169,9 @@ class BridgingHarborDatasetBuilder(HarborDatasetBuilder):
         dataset, test_dataset = await super().__call__()
         if test_dataset is not None and self.eval_task_limit:
             test_dataset = limit_eval_dataset(test_dataset, int(self.eval_task_limit))
+        if test_dataset is not None:
+            # Task identity only: the eval scope owns iteration/split.
+            test_dataset = StampingDataset(test_dataset, batch_coords=False)
         return StampingDataset(dataset), test_dataset
 
     def _make_env_group_builders(self, group_size: int) -> list[HarborEnvGroupBuilder]:

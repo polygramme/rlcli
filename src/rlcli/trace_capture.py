@@ -52,10 +52,17 @@ def task_hash_for(task: Any) -> str | None:
     return _TASK_HASHES[key] or None
 
 
-def stamp_env_group_builders(builders: Iterable[Any], iteration: int) -> None:
-    """Attach batch coordinates to each builder for install_rollout_tags."""
+def stamp_env_group_builders(builders: Iterable[Any], iteration: int | None) -> None:
+    """Attach coordinates to each builder for install_rollout_tags.
+
+    ``iteration=None`` stamps only the task identity: evaluator rollouts get
+    their iteration and split from the enclosing eval scope and must not have
+    it overwritten by the eval dataset's own batch index.
+    """
     for group_idx, builder in enumerate(builders):
-        coords: dict[str, Any] = {"iteration": int(iteration), "group_idx": group_idx}
+        coords: dict[str, Any] = {}
+        if iteration is not None:
+            coords.update(iteration=int(iteration), group_idx=group_idx)
         task = getattr(builder, "task", None)
         name = getattr(task, "task_name", None)
         if name:
@@ -71,14 +78,18 @@ def stamp_env_group_builders(builders: Iterable[Any], iteration: int) -> None:
 
 
 class StampingDataset:
-    """RLDataset proxy whose get_batch stamps coordinates onto the builders."""
+    """RLDataset proxy whose get_batch stamps coordinates onto the builders.
 
-    def __init__(self, inner: Any):
+    ``batch_coords=False`` (the eval split) stamps task identity only.
+    """
+
+    def __init__(self, inner: Any, *, batch_coords: bool = True):
         self._inner = inner
+        self._batch_coords = batch_coords
 
     def get_batch(self, index: int) -> Sequence[Any]:
         builders = self._inner.get_batch(index)
-        stamp_env_group_builders(builders, index)
+        stamp_env_group_builders(builders, index if self._batch_coords else None)
         return builders
 
     def __len__(self) -> int:
