@@ -389,3 +389,18 @@ def test_metrics_report_the_split(inner, prime, tokenizer):
     metrics = renderer.metrics()
     assert metrics["tito_bridged"] == 2
     assert metrics["tito_contract_violations"] == 0
+
+
+def test_limit_eval_dataset_caps_groups_and_keeps_type():
+    from rlcli.harbor_tito import limit_eval_dataset
+
+    class DS:
+        def __init__(self, env_group_builders, batch_size):
+            self.env_group_builders = env_group_builders
+            self.batch_size = batch_size
+
+    ds = DS(list(range(10)), 4)
+    small = limit_eval_dataset(ds, 3)
+    assert type(small) is DS and small.env_group_builders == [0, 1, 2] and small.batch_size == 4
+    assert limit_eval_dataset(ds, 50) is ds and limit_eval_dataset(ds, 0) is ds
+    assert limit_eval_dataset(object(), 3).__class__ is object

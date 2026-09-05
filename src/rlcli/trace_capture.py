@@ -92,6 +92,35 @@ def install_rollout_tags() -> Callable[[], None]:
     return restore
 
 
+def install_eval_tags() -> Callable[[], None]:
+    """Rebind rl.train.run_single_evaluation so evaluator rollouts carry
+    split="eval/<label>" and the iteration. Returns restore(). No-op when the
+    training module is unavailable (torch-free callers)."""
+    try:
+        from tinker_cookbook.capture import capture
+        from tinker_cookbook.rl import train as rl_train
+    except Exception:  # pragma: no cover - optional heavy import
+        return lambda: None
+
+    original = rl_train.run_single_evaluation
+    if getattr(original, "_pg_trace_tagged", False):
+        return lambda: None
+
+    async def run_single_evaluation(evaluator, config, i_batch, sampling_client, evaluator_label, *args, **kwargs):
+        with capture(split=f"eval/{evaluator_label}", iteration=int(i_batch), purpose="eval"):
+            return await original(evaluator, config, i_batch, sampling_client, evaluator_label, *args, **kwargs)
+
+    run_single_evaluation._pg_trace_tagged = True  # type: ignore[attr-defined]
+    run_single_evaluation.__wrapped__ = original  # type: ignore[attr-defined]
+    rl_train.run_single_evaluation = run_single_evaluation
+
+    def restore() -> None:
+        if rl_train.run_single_evaluation is run_single_evaluation:
+            rl_train.run_single_evaluation = original
+
+    return restore
+
+
 # ---- sink ------------------------------------------------------------------
 
 
@@ -258,10 +287,12 @@ def capture_run(
     threads_were_instrumented = propagate.threads_instrumented()
     propagate.instrument_threads()
     restore_tags = install_rollout_tags()
+    restore_eval_tags = install_eval_tags()
     try:
         with capture(run_id=run_id, run_attempt=run_attempt):
             yield session
     finally:
+        restore_eval_tags()
         restore_tags()
         if previous is not None:
             instrument_tinker(previous)

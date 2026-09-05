@@ -172,3 +172,32 @@ def test_capture_run_flushes_and_tears_down(tmp_path):
     assert cap.stats()["rows"] == 1 and cap.stats()["dropped"] == 0
     assert store.inserts and os.path.exists(tmp_path / "traces" / "it00003.jsonl")
     assert logs and logs[-1].startswith("trace capture: ")
+
+
+def test_install_eval_tags_enters_eval_scope_and_restores(monkeypatch):
+    from tinker_cookbook.capture.scope import current_scope
+    from tinker_cookbook.rl import train as rl_train
+
+    seen = []
+
+    async def fake(evaluator, config, i_batch, sampling_client, evaluator_label, store=None):
+        seen.append(dict(current_scope()))
+        return {"test/reward": 1.0}
+
+    monkeypatch.setattr(rl_train, "run_single_evaluation", fake)
+    restore = tc.install_eval_tags()
+    out = asyncio.run(rl_train.run_single_evaluation(None, None, 7, None, "test", store=None))
+    assert out == {"test/reward": 1.0}
+    assert seen[0]["split"] == "eval/test" and seen[0]["iteration"] == 7 and seen[0]["purpose"] == "eval"
+    assert tc.install_eval_tags()() is None
+    restore()
+    assert rl_train.run_single_evaluation is fake
+
+
+def test_eval_rows_land_as_eval_phase_with_step(tmp_path):
+    store = FakeStore()
+    sink = tc.TraceSink(store, "run_x", str(tmp_path))
+    rec = sample_record(iteration=7, split="eval/test", n=1, extra={"purpose": "eval"})
+    sink.export([rec])
+    row = store.inserts[0][1][0]
+    assert row["phase"] == "eval" and row["step"] == 7 and row["storage_path"] == "traces/it00007.jsonl:0"

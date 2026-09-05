@@ -136,6 +136,15 @@ def install_bridge(
     builder.make_envs = make_envs
 
 
+def limit_eval_dataset(dataset, limit: int):
+    """First ``limit`` env groups of a HarborDataset-shaped dataset (same type)."""
+    builders = getattr(dataset, "env_group_builders", None)
+    batch_size = getattr(dataset, "batch_size", None)
+    if builders is None or batch_size is None or limit <= 0 or len(builders) <= limit:
+        return dataset
+    return type(dataset)(env_group_builders=list(builders)[:limit], batch_size=batch_size)
+
+
 @chz.chz
 class BridgingHarborDatasetBuilder(HarborDatasetBuilder):
     """``HarborDatasetBuilder`` with token-in/token-out rollouts.
@@ -147,6 +156,10 @@ class BridgingHarborDatasetBuilder(HarborDatasetBuilder):
     budget_warning_ratio: float | None = 0.2
     budget_warning_text: str | None = None
     parse_error_retries: int = 2
+    # The cookbook evaluates on Harbor's eval dataset = every task, one rollout
+    # each, at step 0 and every ``eval_every`` steps. On a 200-task dataset that
+    # is 200 sandboxes per eval; cap it to the first N tasks (None = all).
+    eval_task_limit: int | None = None
 
     async def __call__(self):
         # Captured samples need to know which batch they came from; the cookbook
@@ -154,6 +167,8 @@ class BridgingHarborDatasetBuilder(HarborDatasetBuilder):
         from rlcli.trace_capture import StampingDataset
 
         dataset, test_dataset = await super().__call__()
+        if test_dataset is not None and self.eval_task_limit:
+            test_dataset = limit_eval_dataset(test_dataset, int(self.eval_task_limit))
         return StampingDataset(dataset), test_dataset
 
     def _make_env_group_builders(self, group_size: int) -> list[HarborEnvGroupBuilder]:
