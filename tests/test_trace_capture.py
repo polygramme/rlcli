@@ -43,9 +43,9 @@ def sample_record(iteration=3, group_idx=1, task="t1", split="train", n=2, extra
 
 
 class Builder:
-    def __init__(self, task_name=None):
+    def __init__(self, task_name=None, task_dir=None):
         if task_name:
-            self.task = type("T", (), {"task_name": task_name})()
+            self.task = type("T", (), {"task_name": task_name, "task_dir": task_dir})()
 
 
 def test_sink_writes_payload_lines_and_rows(tmp_path):
@@ -128,7 +128,7 @@ def test_stamping_dataset_tags_builders():
 
     ds = tc.StampingDataset(Inner())
     a, b = ds.get_batch(2)
-    assert getattr(a, tc.COORDS_ATTR) == {"iteration": 2, "group_idx": 0, "task": "alpha"}
+    assert getattr(a, tc.COORDS_ATTR) == {"iteration": 2, "group_idx": 0, "task": "alpha"}  # no task_dir -> no hash
     assert getattr(b, tc.COORDS_ATTR) == {"iteration": 2, "group_idx": 1}
     assert len(ds) == 7 and ds.batches  # delegation
 
@@ -201,3 +201,35 @@ def test_eval_rows_land_as_eval_phase_with_step(tmp_path):
     sink.export([rec])
     row = store.inserts[0][1][0]
     assert row["phase"] == "eval" and row["step"] == 7 and row["storage_path"] == "traces/it00007.jsonl:0"
+
+
+def test_stamp_includes_task_hash_and_sink_writes_it(tmp_path):
+    d = tmp_path / "task"
+    d.mkdir()
+    (d / "instruction.md").write_text("do it")
+    from rlcli.harbor_tasks import task_content_hash
+
+    b = Builder("alpha", task_dir=d)
+    tc.stamp_env_group_builders([b], 1)
+    coords = getattr(b, tc.COORDS_ATTR)
+    assert coords["task_hash"] == task_content_hash(d)
+    store = FakeStore()
+    sink = tc.TraceSink(store, "run_x", str(tmp_path / "traces"))
+    sink.export([sample_record(n=1, extra={"task_hash": coords["task_hash"]})])
+    assert store.inserts[0][1][0]["task_hash"] == coords["task_hash"]
+
+
+def test_sink_retries_without_task_hash_when_the_store_rejects_it(tmp_path):
+    class FKStore(FakeStore):
+        def insert(self, table, rows, **kw):
+            rows = list(rows)
+            if any(r.get("task_hash") for r in rows):
+                raise RuntimeError('violates foreign key constraint "traces_task_hash_fkey"')
+            return super().insert(table, rows, **kw)
+
+    store = FKStore()
+    sink = tc.TraceSink(store, "run_x", str(tmp_path))
+    sink.export([sample_record(n=2, extra={"task_hash": "deadbeef"})])
+    assert sink.task_hash_fallbacks == 1 and sink.store_failures == 0
+    assert [r["task_hash"] for r in store.inserts[0][1]] == [None, None]
+    assert sink.rows == 2

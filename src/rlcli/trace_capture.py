@@ -33,13 +33,36 @@ UNTAGGED_FILE = "untagged.jsonl"
 # ---- coordinates -----------------------------------------------------------
 
 
+_TASK_HASHES: dict[str, str] = {}
+
+
+def task_hash_for(task: Any) -> str | None:
+    """Content hash of a Harbor task (by its task_dir), cached per directory."""
+    task_dir = getattr(task, "task_dir", None)
+    if not task_dir:
+        return None
+    key = str(task_dir)
+    if key not in _TASK_HASHES:
+        try:
+            from rlcli.harbor_tasks import task_content_hash
+
+            _TASK_HASHES[key] = task_content_hash(task_dir)
+        except Exception:
+            _TASK_HASHES[key] = ""
+    return _TASK_HASHES[key] or None
+
+
 def stamp_env_group_builders(builders: Iterable[Any], iteration: int) -> None:
     """Attach batch coordinates to each builder for install_rollout_tags."""
     for group_idx, builder in enumerate(builders):
         coords: dict[str, Any] = {"iteration": int(iteration), "group_idx": group_idx}
-        name = getattr(getattr(builder, "task", None), "task_name", None)
+        task = getattr(builder, "task", None)
+        name = getattr(task, "task_name", None)
         if name:
             coords["task"] = str(name)
+        task_hash = task_hash_for(task)
+        if task_hash:
+            coords["task_hash"] = task_hash
         try:
             setattr(builder, COORDS_ATTR, coords)
         except AttributeError:
@@ -156,6 +179,7 @@ class TraceSink:
         self.rows = 0
         self.skipped = 0
         self.store_failures = 0
+        self.task_hash_fallbacks = 0
 
     def export(self, records: Sequence[Mapping[str, Any]], timeout: float | None = None) -> None:
         from tinker_cookbook.capture.store.client import wire_rows_from_sample_record
@@ -174,10 +198,18 @@ class TraceSink:
             try:
                 self.store.insert("traces", rows, returning=False)
             except Exception:
-                # Payload lines are already on disk; the exporter counts and
-                # logs the failed batch, training never sees it.
-                self.store_failures += 1
-                raise
+                # traces.task_hash references tasks(content_hash). A task the
+                # store has never seen must not cost the batch: retry once
+                # without the reference, then let the exporter count it.
+                if not any(r.get("task_hash") for r in rows):
+                    self.store_failures += 1
+                    raise
+                try:
+                    self.store.insert("traces", [{**r, "task_hash": None} for r in rows], returning=False)
+                    self.task_hash_fallbacks += 1
+                except Exception:
+                    self.store_failures += 1
+                    raise
 
     def _persist(self, wire: Mapping[str, Any]) -> dict:
         it = wire.get("iteration")
@@ -210,6 +242,7 @@ class TraceSink:
             "step": it if tagged else None,
             "phase": _phase(wire),
             "sample_idx": wire.get("sample_idx"),
+            "task_hash": scope.get("task_hash"),
             "tokens": len(payload["prompt_tokens"] or []) + len(payload["sampled_tokens"] or []),
             "storage_path": f"{PAYLOAD_SUBDIR}/{fname}:{n}",
             "meta": {k: v for k, v in meta.items() if v is not None},
@@ -257,6 +290,7 @@ class CaptureRun:
             "rows": self.sink.rows,
             "skipped": self.sink.skipped,
             "store_failures": self.sink.store_failures,
+            "task_hash_fallbacks": self.sink.task_hash_fallbacks,
             "dropped": self.exporter.dropped,
             "export_failures": self.exporter.export_failures,
         }
