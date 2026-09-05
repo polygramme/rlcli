@@ -285,7 +285,8 @@ class TrajectoryRecorder:
     def to_dict(self, *, reward: float | None, metrics: dict | None) -> dict:
         coords = self.coords()
         turns = sum(1 for s in self.steps if s["source"] == "agent")
-        final_extra = {"reward": reward, "turns": turns, "duration_s": round(time.time() - self._t0, 3)}
+        tool_calls = sum(len(s.get("tool_calls") or []) for s in self.steps if s["source"] == "agent")
+        final_extra = {"reward": reward, "turns": turns, "tool_calls": tool_calls, "duration_s": round(time.time() - self._t0, 3)}
         if metrics:
             final_extra["env_metrics"] = {k: v for k, v in metrics.items() if isinstance(v, (int, float, str))}
         sid = ":".join(str(coords.get(k, "-")) for k in ("run_id", "iteration", "group_idx", "traj_idx"))
@@ -416,6 +417,7 @@ class FileSink(TrajectorySink):
                     "trajectory_id": trajectory.get("trajectory_id"),
                     "reward": ex.get("reward"),
                     "turns": ex.get("turns"),
+                    "tool_calls": ex.get("tool_calls"),
                     "duration_s": ex.get("duration_s"),
                     "prompt_tokens": fm.get("total_prompt_tokens"),
                     "completion_tokens": fm.get("total_completion_tokens"),

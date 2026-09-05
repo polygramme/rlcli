@@ -98,7 +98,8 @@ def test_recorder_builds_atif_steps_and_finalizes(tmp_path):
     assert "Please wrap up." in [s["message"] for s in traj["steps"] if s["source"] == "user"]
     fm = traj["final_metrics"]
     assert fm["total_prompt_tokens"] == 9 and fm["total_completion_tokens"] == 6 and fm["total_steps"] == len(traj["steps"])
-    assert fm["extra"]["reward"] == 1.0 and fm["extra"]["turns"] == 3 and fm["extra"]["env_metrics"] == {"test_passed": 1.0}
+    assert fm["extra"]["reward"] == 1.0 and fm["extra"]["turns"] == 3 and fm["extra"]["tool_calls"] == 3 and fm["extra"]["env_metrics"] == {"test_passed": 1.0}
+    assert written[0]["tool_calls"] == 3
     assert written[0]["reward"] == 1.0 and written[0]["turns"] == 3 and written[0]["coords"]["traj_idx"] == 2
 
 
