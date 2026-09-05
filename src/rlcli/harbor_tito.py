@@ -148,6 +148,14 @@ class BridgingHarborDatasetBuilder(HarborDatasetBuilder):
     budget_warning_text: str | None = None
     parse_error_retries: int = 2
 
+    async def __call__(self):
+        # Captured samples need to know which batch they came from; the cookbook
+        # loop never says, so the dataset stamps it onto each batch's builders.
+        from rlcli.trace_capture import StampingDataset
+
+        dataset, test_dataset = await super().__call__()
+        return StampingDataset(dataset), test_dataset
+
     def _make_env_group_builders(self, group_size: int) -> list[HarborEnvGroupBuilder]:
         builders = super()._make_env_group_builders(group_size)
         for builder in builders:
