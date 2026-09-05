@@ -404,3 +404,35 @@ def test_limit_eval_dataset_caps_groups_and_keeps_type():
     assert type(small) is DS and small.env_group_builders == [0, 1, 2] and small.batch_size == 4
     assert limit_eval_dataset(ds, 50) is ds and limit_eval_dataset(ds, 0) is ds
     assert limit_eval_dataset(object(), 3).__class__ is object
+
+
+def test_surface_metrics_merges_recorder_counters_and_error_flag():
+    import asyncio
+    from rlcli.harbor_tito import _surface_bridge_metrics
+
+    class R:
+        def metrics(self):
+            return {"tito_bridged": 2.0, "tito_contract_violations": 0.0}
+
+    class Rec:
+        def metrics(self):
+            return {"tools/calls": 4.0, "tools/bash": 4.0, "errors/parse_episode": 0.0}
+
+    class Result:
+        episode_done = True
+        metrics = {}
+
+    class Env:
+        renderer = R()
+        _pg_recorder = Rec()
+
+        async def step(self, action):
+            return Result()
+
+    env = Env()
+    _surface_bridge_metrics(env)
+    out = asyncio.run(env.step(None)).metrics
+    assert out["tools/bash"] == 4.0 and out["tito_bridged"] == 2.0 and out["errors/any"] == 0.0
+    Rec.metrics = lambda self: {"errors/parse_episode": 1.0}
+    Result.metrics = {}
+    assert asyncio.run(env.step(None)).metrics["errors/any"] == 1.0

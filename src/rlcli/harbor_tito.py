@@ -84,6 +84,16 @@ def _surface_bridge_metrics(env) -> None:
         result = await orig_step(action, *args, **kwargs)
         if result.episode_done:
             result.metrics.update(renderer.metrics())
+            rec = getattr(env, "_pg_recorder", None)
+            if rec is not None:
+                try:
+                    result.metrics.update(rec.metrics())
+                except Exception:  # noqa: BLE001 - counters must never fail a step
+                    pass
+            # One "went wrong" flag per episode: an unparsable tool call or a
+            # TITO contract violation. The cookbook's mean = the error rate.
+            bad = (result.metrics.get("errors/parse_episode") or 0) > 0 or (result.metrics.get("tito_contract_violations") or 0) > 0
+            result.metrics["errors/any"] = 1.0 if bad else 0.0
         return result
 
     env.step = step

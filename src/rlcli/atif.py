@@ -126,6 +126,8 @@ class TrajectoryRecorder:
         self._started = _now()
         self._t0 = time.time()
         self._open_agent: dict | None = None
+        self.tool_counts: dict[str, int] = {}
+        self.unparsed = 0
 
     # -- steps
 
@@ -153,6 +155,11 @@ class TrajectoryRecorder:
         calls = _tool_calls(message)
         if calls:
             step["tool_calls"] = calls
+            for c in calls:
+                if (c.get("extra") or {}).get("parse_error"):
+                    self.unparsed += 1
+                else:
+                    self.tool_counts[c["function_name"]] = self.tool_counts.get(c["function_name"], 0) + 1
         metrics = self._bridge_metrics()
         if metrics:
             step["metrics"] = metrics
@@ -200,10 +207,22 @@ class TrajectoryRecorder:
                 {k: v for k, v in r.items() if v is not None} for r in results
             )
 
+    def metrics(self) -> dict[str, float]:
+        """Per-episode counters the cookbook averages into the run's per-step
+        metrics: tools/<name> and tools/calls (mean calls per episode),
+        errors/parse_episode (fraction of episodes with an unparsable call)."""
+        m: dict[str, float] = {"tools/calls": float(sum(self.tool_counts.values()))}
+        for name, n in self.tool_counts.items():
+            m[f"tools/{name}"] = float(n)
+        m["errors/parse_calls"] = float(self.unparsed)
+        m["errors/parse_episode"] = 1.0 if self.unparsed else 0.0
+        return m
+
     # -- wrappers
 
     def install(self) -> "TrajectoryRecorder":
         env, rec = self.env, self
+        env._pg_recorder = self
         menv = getattr(env, "message_env", None)
         if menv is None:
             raise TypeError("recorder needs an EnvFromMessageEnv (no message_env)")

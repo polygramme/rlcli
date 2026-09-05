@@ -153,3 +153,21 @@ def test_tool_call_argument_parsing_and_unparsed():
     calls = atif._tool_calls(msg)
     assert calls[0]["arguments"] == {"raw": "not json"} and calls[1]["arguments"] == {"k": 1} and calls[1]["tool_call_id"] == "call_1"
     assert calls[2]["function_name"] == "unparsed" and calls[2]["extra"] == {"parse_error": True}
+
+
+def test_recorder_counts_tool_calls_and_parse_errors_for_metrics():
+    env = FakeEnv()
+    atif.configure(atif.FileSink(str(__import__("tempfile").mkdtemp())))
+    rec = atif.install_recorder(env, traj_idx=0)
+    msgs = [
+        {"role": "assistant", "content": "a", "tool_calls": [TC("1", "bash", "{}"), TC("2", "bash", "{}"), TC("3", "read_file", "{}")]},
+        {"role": "assistant", "content": "b", "unparsed_tool_calls": [{"raw": "<bad>"}]},
+    ]
+
+    async def run():
+        await env.message_env.initial_observation()
+        for m in msgs:
+            await env.message_env.step(m)
+
+    asyncio.run(run())
+    assert rec.metrics() == {"tools/calls": 3.0, "tools/bash": 2.0, "tools/read_file": 1.0, "errors/parse_calls": 1.0, "errors/parse_episode": 1.0}
