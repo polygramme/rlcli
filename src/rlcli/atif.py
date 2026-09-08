@@ -14,6 +14,7 @@ path: a recorder failure is logged and the episode continues.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -106,6 +107,20 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def completion_key(ids: Any) -> str | None:
+    """Join key between an ATIF agent step and the per-sample capture row
+    that produced it: a digest of the first 16 sampled token ids. Both sides
+    can compute it from what they already hold, so no scope plumbing is
+    needed to link them (the capture SDK has no per-env index)."""
+    try:
+        head = [int(t) for t in list(ids)[:16]]
+    except (TypeError, ValueError):
+        return None
+    if not head:
+        return None
+    return hashlib.sha1(",".join(map(str, head)).encode()).hexdigest()[:16]
+
+
 # ---- recorder --------------------------------------------------------------
 
 
@@ -182,6 +197,9 @@ class TrajectoryRecorder:
             self._completion_tokens += len(completion)
             if self.include_token_ids:
                 m["completion_token_ids"] = list(completion)
+            ck = completion_key(completion)
+            if ck:
+                m["extra"] = {"ckey": ck}
         return m
 
     def _ingest_after_step(self, history: list[Any]) -> None:
@@ -203,8 +221,14 @@ class TrajectoryRecorder:
 
     def _flush_observation(self, results: list[dict]) -> None:
         if results and self._open_agent is not None:
+            # ATIF validates source_call_id against the tool_call_ids of the
+            # same step; an env answering an unparsable call (or one we never
+            # saw) would make the whole file invalid. Keep the content, drop
+            # the dangling reference.
+            known = {c.get("tool_call_id") for c in self._open_agent.get("tool_calls") or []}
             self._open_agent.setdefault("observation", {"results": []})["results"].extend(
-                {k: v for k, v in r.items() if v is not None} for r in results
+                {k: v for k, v in r.items() if v is not None and not (k == "source_call_id" and v not in known)}
+                for r in results
             )
 
     def metrics(self) -> dict[str, float]:
@@ -286,7 +310,8 @@ class TrajectoryRecorder:
         coords = self.coords()
         turns = sum(1 for s in self.steps if s["source"] == "agent")
         tool_calls = sum(len(s.get("tool_calls") or []) for s in self.steps if s["source"] == "agent")
-        final_extra = {"reward": reward, "turns": turns, "tool_calls": tool_calls, "duration_s": round(time.time() - self._t0, 3)}
+        final_extra = {"reward": reward, "rewards": ({"reward": reward} if reward is not None else {}),
+                       "turns": turns, "tool_calls": tool_calls, "duration_s": round(time.time() - self._t0, 3)}
         if metrics:
             final_extra["env_metrics"] = {k: v for k, v in metrics.items() if isinstance(v, (int, float, str))}
         sid = ":".join(str(coords.get(k, "-")) for k in ("run_id", "iteration", "group_idx", "traj_idx"))
@@ -307,6 +332,11 @@ class TrajectoryRecorder:
 
     def finalize(self, *, reward: float | None, metrics: dict | None = None) -> dict | None:
         self.done = True
+        if not self.steps:
+            # ATIF requires at least one step; an episode that died before its
+            # prompt has nothing a reader could use.
+            log.warning("atif: episode traj_idx=%s ended with no steps; not written", self.traj_idx)
+            return None
         traj = self.to_dict(reward=reward, metrics=metrics)
         sink = _SINK
         if sink is not None:
@@ -345,12 +375,18 @@ def _rlcli_version() -> str:
         return "0"
 
 
-def install_recorder(env: Any, *, traj_idx: int, model_name: str | None = None) -> TrajectoryRecorder | None:
-    """Attach a recorder when a sink is configured; None otherwise."""
+def install_recorder(env: Any, *, traj_idx: int, model_name: str | None = None,
+                     include_token_ids: bool = False) -> TrajectoryRecorder | None:
+    """Attach a recorder when a sink is configured; None otherwise.
+
+    ``include_token_ids`` inlines each agent step's prompt/completion token
+    ids under ``metrics`` (the slots ATIF reserves for them; Harbor's own
+    agent writes them the same way). Files grow by a few KB per turn."""
     if _SINK is None:
         return None
     try:
-        return TrajectoryRecorder(env, traj_idx=traj_idx, model_name=model_name).install()
+        return TrajectoryRecorder(env, traj_idx=traj_idx, model_name=model_name,
+                                  include_token_ids=include_token_ids).install()
     except Exception:  # noqa: BLE001
         log.exception("atif: recorder install failed")
         return None
@@ -426,3 +462,84 @@ class FileSink(TrajectorySink):
             except Exception:  # noqa: BLE001
                 log.exception("atif: on_written failed")
         return rel
+
+
+# ---- conversions -----------------------------------------------------------
+
+
+def messages_to_trajectory(
+    messages: list[dict],
+    *,
+    agent_name: str = "import",
+    agent_version: str = "0",
+    model_name: str | None = None,
+    reward: float | None = None,
+    rewards: dict[str, float] | None = None,
+    trace_id: str | None = None,
+    tools: list[dict] | None = None,
+    extra: dict | None = None,
+) -> dict:
+    """An OpenAI-style messages list (the shape ``rlcli import`` emits) as one
+    ATIF trajectory: system/user turns become steps, each assistant turn an
+    agent step carrying its tool calls, and the tool messages that follow it
+    its observation. Rewards land in ``final_metrics.extra`` the way the
+    recorder writes them. Raises ValueError when nothing is trainable."""
+    steps: list[dict] = []
+    open_agent: dict | None = None
+    n_tools = 0
+
+    def add(step: dict) -> dict:
+        step["step_id"] = len(steps) + 1
+        steps.append(step)
+        return step
+
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content")
+        text, reasoning = _text_and_reasoning(content) if not isinstance(content, str) else (content, None)
+        if m.get("reasoning_content") and not reasoning:
+            reasoning = str(m["reasoning_content"])
+        if role in ("system", "user"):
+            open_agent = None
+            add({"source": role, "message": text or ""})
+        elif role == "assistant":
+            step: dict = {"source": "agent", "message": text or "", "llm_call_count": 1}
+            if model_name:
+                step["model_name"] = model_name
+            if reasoning:
+                step["reasoning_content"] = reasoning
+            calls = _tool_calls(m)
+            if calls:
+                step["tool_calls"] = calls
+                n_tools += len(calls)
+            open_agent = add(step)
+        elif role == "tool":
+            if open_agent is None:
+                continue  # a result with no call before it: nothing to attach to
+            known = {c.get("tool_call_id") for c in open_agent.get("tool_calls") or []}
+            r: dict = {"content": text or ""}
+            if m.get("tool_call_id") in known:
+                r["source_call_id"] = m["tool_call_id"]
+            open_agent.setdefault("observation", {"results": []})["results"].append(r)
+    if not steps or not any(s["source"] == "agent" for s in steps):
+        raise ValueError("no assistant turn to record")
+    turns = sum(1 for s in steps if s["source"] == "agent")
+    rmap = dict(rewards or {})
+    if reward is not None:
+        rmap.setdefault("reward", float(reward))
+    scalar = reward if reward is not None else (rmap.get("reward") if rmap else None)
+    agent: dict = {"name": agent_name, "version": agent_version}
+    if model_name:
+        agent["model_name"] = model_name
+    if tools:
+        agent["tool_definitions"] = list(tools)
+    out = {
+        "schema_version": SCHEMA_VERSION,
+        "trajectory_id": uuid.uuid4().hex,
+        "agent": agent,
+        "steps": steps,
+        "final_metrics": {"total_steps": len(steps),
+                          "extra": {"reward": scalar, "rewards": rmap, "turns": turns, "tool_calls": n_tools}},
+        "extra": {"source": "upload", **({"trace_id": trace_id} if trace_id else {}), **(extra or {})},
+    }
+    return out

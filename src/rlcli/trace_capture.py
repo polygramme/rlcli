@@ -24,6 +24,8 @@ import os
 import threading
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from rlcli.atif import completion_key
+
 COORDS_ATTR = "_pg_trace_coords"
 PAYLOAD_KEYS = ("prompt_tokens", "sampled_tokens", "logprobs")
 PAYLOAD_SUBDIR = "traces"
@@ -247,6 +249,9 @@ class TraceSink:
             "stop_reason": payload["metadata"].get("stop_reason"),
             "task": scope.get("task"),
             "split": wire.get("split"),
+            # Links this row to the ATIF agent step it produced (rlcli.atif
+            # stamps the same digest under step.metrics.extra.ckey).
+            "ckey": completion_key(payload.get("sampled_tokens") or []),
         }
         return {
             "run_id": self.run_id,

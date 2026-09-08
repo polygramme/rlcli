@@ -92,7 +92,7 @@ def test_recorder_builds_atif_steps_and_finalizes(tmp_path):
     assert first_agent["message"] == "turn 1" and first_agent["reasoning_content"] == "hmm"
     assert first_agent["tool_calls"] == [{"tool_call_id": "c1", "function_name": "bash", "arguments": {"cmd": "ls"}}]
     assert first_agent["observation"]["results"] == [{"source_call_id": "c1", "content": "ran bash"}]
-    assert first_agent["metrics"] == {"prompt_tokens": 3, "completion_tokens": 2}
+    assert first_agent["metrics"] == {"prompt_tokens": 3, "completion_tokens": 2, "extra": {"ckey": atif.completion_key([4, 5])}}
     assert first_agent["llm_call_count"] == 1
     assert [s["step_id"] for s in traj["steps"]] == list(range(1, len(traj["steps"]) + 1))
     assert "Please wrap up." in [s["message"] for s in traj["steps"] if s["source"] == "user"]
@@ -185,3 +185,102 @@ def test_trajectory_text_and_sink_record_text(tmp_path):
     sink = atif.FileSink(str(tmp_path), on_written=written.append)
     sink.write({"trajectory_id": "x", "steps": traj["steps"], "extra": {}, "final_metrics": {}})
     assert written[0]["text"].startswith("[user] fix the build")
+
+
+def test_token_ids_inline_and_join_key(tmp_path):
+    written = []
+    atif.configure(atif.FileSink(str(tmp_path), on_written=written.append))
+    env = FakeEnv()
+    atif.install_recorder(env, traj_idx=0, include_token_ids=True)
+
+    async def run():
+        await env.message_env.initial_observation()
+        for _ in range(3):
+            await env.step([1])
+
+    asyncio.run(run())
+    traj = json.load(open(tmp_path / written[0]["path"]))
+    agent = next(s for s in traj["steps"] if s["source"] == "agent")
+    assert agent["metrics"]["prompt_token_ids"] == [1, 2, 3] and agent["metrics"]["completion_token_ids"] == [4, 5]
+    assert agent["metrics"]["extra"]["ckey"] == atif.completion_key([4, 5])
+    assert atif.completion_key([]) is None and atif.completion_key([4, 5]) != atif.completion_key([4, 6])
+    assert traj["final_metrics"]["extra"]["rewards"] == {"reward": 1.0}
+
+
+def test_dangling_tool_result_ids_are_dropped_not_written(tmp_path):
+    """An env answering a call the model never made (or an unparsable one)
+    must not produce an ATIF file Harbor's validator rejects."""
+
+    class OddEnv(FakeMessageEnv):
+        async def step(self, message):
+            self.history.append(message)
+            self.history.append({"role": "tool", "tool_call_id": "ghost", "content": "who called?"})
+            return StepOut(self.history)
+
+    written = []
+    atif.configure(atif.FileSink(str(tmp_path), on_written=written.append))
+    env = FakeEnv()
+    env.message_env = OddEnv()
+    rec = atif.install_recorder(env, traj_idx=0)
+
+    async def run():
+        await env.message_env.initial_observation()
+        for _ in range(3):
+            await env.step([1])
+
+    asyncio.run(run())
+    traj = json.load(open(tmp_path / written[0]["path"]))
+    agent = next(s for s in traj["steps"] if s["source"] == "agent")
+    assert agent["observation"]["results"] == [{"content": "who called?"}]
+    assert rec.done
+
+
+def test_empty_episode_is_not_written(tmp_path):
+    written = []
+    sink = atif.FileSink(str(tmp_path), on_written=written.append)
+    atif.configure(sink)
+    rec = atif.TrajectoryRecorder(FakeEnv(), traj_idx=0)
+    assert rec.finalize(reward=0.0) is None and sink.written == 0 and rec.done
+
+
+def test_recorded_file_validates_against_harbor_models(tmp_path):
+    """The file must load through Harbor's own pydantic models (extra=forbid
+    everywhere), otherwise the Harbor viewer and atif2otel cannot read it."""
+    harbor = pytest.importorskip("harbor.models.trajectories")
+    written = []
+    atif.configure(atif.FileSink(str(tmp_path), on_written=written.append))
+    env = FakeEnv()
+    atif.install_recorder(env, traj_idx=0, model_name="Qwen/Qwen3.5-9B", include_token_ids=True)
+
+    async def run():
+        await env.message_env.initial_observation()
+        for _ in range(3):
+            await env.step([1])
+
+    asyncio.run(run())
+    traj = json.load(open(tmp_path / written[0]["path"]))
+    harbor.Trajectory.model_validate(traj)
+
+
+def test_messages_to_trajectory_round_trips_tools_and_rewards():
+    msgs = [
+        {"role": "system", "content": "be terse"},
+        {"role": "user", "content": "list files"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "bash", "arguments": "{\"cmd\": \"ls\"}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "a.py"},
+        {"role": "tool", "tool_call_id": "nope", "content": "orphan result"},
+        {"role": "assistant", "content": "done", "reasoning_content": "easy"},
+    ]
+    traj = atif.messages_to_trajectory(msgs, reward=0.5, rewards={"helpful": 1.0}, trace_id="t-1", model_name="m")
+    assert [s["source"] for s in traj["steps"]] == ["system", "user", "agent", "agent"]
+    agent = traj["steps"][2]
+    assert agent["tool_calls"][0]["arguments"] == {"cmd": "ls"}
+    assert agent["observation"]["results"] == [{"content": "a.py", "source_call_id": "c1"}, {"content": "orphan result"}]
+    assert traj["steps"][3]["reasoning_content"] == "easy"
+    fm = traj["final_metrics"]["extra"]
+    assert fm["reward"] == 0.5 and fm["rewards"] == {"helpful": 1.0, "reward": 0.5} and fm["turns"] == 2 and fm["tool_calls"] == 1
+    assert traj["extra"] == {"source": "upload", "trace_id": "t-1"}
+    harbor = pytest.importorskip("harbor.models.trajectories")
+    harbor.Trajectory.model_validate(traj)
+    with pytest.raises(ValueError):
+        atif.messages_to_trajectory([{"role": "user", "content": "hi"}])

@@ -192,7 +192,8 @@ def install_bridge(
 
         stats = getattr(builder, "_pg_sandbox_stats", None) or {}
         for traj_idx, env in enumerate(envs):
-            atif.install_recorder(env, traj_idx=traj_idx, model_name=getattr(builder, "model_name", None))
+            atif.install_recorder(env, traj_idx=traj_idx, model_name=getattr(builder, "model_name", None),
+                                  include_token_ids=bool(getattr(builder, "atif_token_ids", True)))
             durations = stats.get("create_s") or []
             env._pg_sandbox = {"create_s": durations[traj_idx] if traj_idx < len(durations) else None,
                                "failed_in_group": stats.get("failed", 0)}
