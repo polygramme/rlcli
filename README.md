@@ -30,6 +30,7 @@ rlcli train harbor --model Qwen/Qwen3-4B-Instruct-2507 --loss gspo --dataset ./t
 
 # on-policy self-distillation: the same weights, given a privileged hint, teach the student
 rlcli train opsd --model Qwen/Qwen3-4B-Instruct-2507 --dataset prompts.jsonl --teacher-hint "Think step by step and check your arithmetic."
+# …or one hint per prompt: {"messages": [...], "hint": "The recorded answer was: ..."} rows
 
 # import your agent's chat dumps and fine-tune on them, all on your hardware
 rlcli import prod-traces.jsonl -f openai | rlcli train sl --dataset - --model Qwen/Qwen3-4B-Instruct-2507
@@ -59,10 +60,10 @@ Measured, with receipts in [`benchmarks/`](benchmarks/):
 - `rlcli serve` manages a SkyRL Tinker server in its own uv venv (`~/.rlcli/server-venv`) — required because skyrl caps `tinker<=0.24.1` while the client uses 0.25.0; they meet over HTTP.
 - Backends: `jax` (runs anywhere, CPU ok), `fsdp` / `megatron` (Linux + CUDA; serve the full loss set incl. `gspo`, `cispo`, `dppo`, `ppo_critic`).
 - `rlcli train` invokes pinned [tinker-cookbook](https://github.com/thinking-machines-lab/tinker-cookbook) recipes programmatically. `--loss gspo` on a JAX server fails fast with a clear error.
-- `rlcli train harbor` runs Harbor-format tasks (Dockerfile + instruction + test script) on your local Docker daemon — the test verdict is the reward. No cloud sandbox account needed.
+- `rlcli train harbor` runs Harbor-format tasks (Dockerfile + instruction + test script) on your local Docker daemon — the test verdict is the reward. No cloud sandbox account needed. The contract: if `tests/test.sh` writes `/logs/verifier/reward.txt` (a number) or `reward.json` (`{"reward": x}`) that is the reward; otherwise its exit status is (0 → 1.0, else 0.0). The upstream cookbook grader only reads the file and scores a missing one 0, which silently zeroed every exit-status task; rlcli patches that in.
 - `--tito` (implied by `--trajectories`) makes multi-turn rollouts token-in/token-out: each turn extends the previous turn's *sampled* tokens instead of re-rendering the history (`rlcli/tito_bridge.py`, on PrimeIntellect's `renderers`). Without it, chat templates that drop thinking on re-render (Qwen3.5) split every turn into its own datum.
 - `--trajectories DIR` records every episode as an [ATIF](https://github.com/laude-institute/harbor/blob/main/rfcs/0001-trajectory-format.md) trajectory — Harbor's interchange format — with prompt and completion token ids inline; see below.
-- `rlcli train opsd` runs on-policy distillation from a prompts JSONL (`{"prompt": ...}` or `{"messages": [...]}`): the student samples, a teacher (`--teacher`: any base model or `tinker://` checkpoint on the server; default the student's own base) scores those tokens, and the negative reverse KL becomes the per-token advantage. `--teacher-hint TEXT` gives the teacher privileged context the student never sees.
+- `rlcli train opsd` runs on-policy distillation from a prompts JSONL (`{"prompt": ...}` or `{"messages": [...]}`): the student samples, a teacher (`--teacher`: any base model or `tinker://` checkpoint on the server; default the student's own base) scores those tokens, and the negative reverse KL becomes the per-token advantage. `--teacher-hint TEXT` gives the teacher privileged context the student never sees, and a row-level `"hint"` in the JSONL (the recorded answer, a verifier's output, a user's correction) overrides it per prompt — the shape self-distillation from production traces needs.
 - `rlcli checkpoint / run / session` pass through to the official tinker CLI, pointed at your server.
 - Everything stays in your environment: traces, data, training, weights.
 
