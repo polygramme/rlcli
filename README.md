@@ -1,10 +1,16 @@
 # rlcli — A CLI Interface for Continual Learning
 
-rlcli runs fused GSPO on your own GPUs in one forward-backward call, the loss hosted Tinker does not serve. Backed by [SkyRL](https://github.com/NovaSky-AI/SkyRL), driven from your terminal.
+rlcli is the open continual-learning loop for agents, on your own GPUs: bring your harness, turn its traces into verifiable sandbox environments, train with RL and self-distillation, and eval every checkpoint in the same sandboxes. Backed by [SkyRL](https://github.com/NovaSky-AI/SkyRL), driven from your terminal. Nothing leaves your machine — traces, environments, training, weights.
 
-rlcli is a Python CLI that runs fused RL losses like **GSPO** on your own GPUs in a single `forward_backward` call. Hosted Tinker does not serve GSPO natively: reproducing it there costs a 2-pass round-trip (fetch logprobs, compute the loss client-side, ship the reweighted batch back). rlcli gives you the fused 1-pass path locally, and [our benchmark](benchmarks/last_gspo_bench.json) measures a **23% step-time reduction and 29.8% throughput gain** on Qwen3-4B-Instruct-2507.
+The loop, end to end:
 
-It is also the missing front door for the whole stack: the official `tinker` CLI has no `train` verb, and SkyRL has no CLI. rlcli wires them together so you can serve a model, run SFT or RL, and sample from checkpoints without leaving your terminal.
+1. **Bring your harness.** `rlcli capture` records any OpenAI-compatible agent's calls as traces; `rlcli import` reads OpenAI, Anthropic, LangSmith, Vercel AI SDK and CSV dumps, redacts PII, and joins telemetry scores as rewards.
+2. **Traces → environments.** `rlcli synth` drafts a Harbor task per conversation — Dockerfile, instruction, test script — and keeps only tasks an untouched container *fails*, so every task is a reward signal.
+3. **Train in sandboxes.** `rlcli train harbor` runs RL against those tasks in local Docker sandboxes with the test verdict as the reward, token-in/token-out across turns, and writes every episode as an ATIF trajectory with its token ids. `rlcli train opsd` self-distills the same weights with a privileged hint; `rlcli train sl` fine-tunes on conversations.
+4. **Eval in the sandbox.** `--eval-every` re-runs the held-out split of the same tasks on each checkpoint, so the number you promote on is measured where the agent actually runs.
+5. **Serve and go again.** Sample from any checkpoint on your Tinker-API server, capture the next round of traces, repeat.
+
+Underneath, the trainer runs fused RL losses — **GSPO**, DPPO, CISPO — in a single `forward_backward` call, which hosted Tinker does not serve natively (reproducing GSPO there is a 2-pass round-trip: fetch logprobs, compute the loss client-side, ship the reweighted batch back). [Our benchmark](benchmarks/last_gspo_bench.json) measures a **23% step-time reduction and 29.8% throughput gain** on Qwen3-4B-Instruct-2507 from the fused path. rlcli is also the missing front door for the stack: the official `tinker` CLI has no `train` verb and SkyRL has no CLI; rlcli wires them together.
 
 ```bash
 # serve a Tinker-API training server on your hardware
@@ -144,6 +150,6 @@ Policy: tinker and tinker-cookbook are pinned dependencies; we do not carry patc
 
 ## Roadmap
 
-Richer environment synthesis (multi-turn tasks, rubric graders, solution replay) → PII redaction → on-policy distillation and multi-tenant LoRA → the scheduled continual-learning loop.
+Richer environment synthesis (multi-turn tasks, rubric graders, solution replay) → Anthropic-format capture → multi-tenant LoRA → the scheduled continual-learning loop.
 
 Apache-2.0.
