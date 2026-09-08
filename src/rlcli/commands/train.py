@@ -357,11 +357,18 @@ def opsd(dataset_path, model_name, base_url, teacher, teacher_hint, kl_penalty_c
 @click.option("--sandbox-timeout", type=int, default=3600, show_default=True)
 @click.option("--command-timeout", type=int, default=120, show_default=True)
 @click.option("--log-path", default=None)
+@click.option("--trajectories", "trajectories_dir", default=None, metavar="DIR",
+              help="Record every episode as an ATIF trajectory (Harbor's format) under DIR, "
+                   "with prompt/completion token ids inline. Implies --tito.")
+@click.option("--tito/--no-tito", default=None,
+              help="Token-in/token-out rollouts: each turn extends the previous turn's sampled "
+                   "tokens instead of re-rendering history (rlcli.tito_bridge). Default: on when "
+                   "--trajectories is set, off otherwise.")
 @click.option("--dry-run", is_flag=True, help="Load tasks and build the config, don't train.")
 def harbor(model_name, base_url, loss, loss_config, backend_hint, dataset, sandbox,
            task_filter, task_limit, renderer_name, group_size, groups_per_batch,
            learning_rate, max_tokens, max_turns, lora_rank, save_every, eval_every,
-           max_steps, sandbox_timeout, command_timeout, log_path, dry_run):
+           max_steps, sandbox_timeout, command_timeout, log_path, trajectories_dir, tito, dry_run):
     """RL on Harbor tasks in local Docker sandboxes, reward from tests/test.sh."""
     backend = backend_hint or backend_for_url(base_url)
     ensure_loss_supported(loss, backend)
@@ -409,7 +416,15 @@ def harbor(model_name, base_url, loss, loss_config, backend_hint, dataset, sandb
         sandbox_factory = local_docker_sandbox_factory
 
     renderer_name = _renderer_for(model_name, renderer_name)
-    dataset_builder = HarborDatasetBuilder(
+    use_tito = bool(trajectories_dir) if tito is None else bool(tito)
+    builder_cls = HarborDatasetBuilder
+    if use_tito:
+        # Bridging builder: token-in/token-out rollouts + the ATIF recorder on
+        # every env (the recorder only writes while a sink is configured).
+        from rlcli.harbor_tito import BridgingHarborDatasetBuilder
+
+        builder_cls = BridgingHarborDatasetBuilder
+    dataset_builder = builder_cls(
         tasks=tasks,
         batch_size=groups_per_batch,
         group_size=group_size,
@@ -438,14 +453,25 @@ def harbor(model_name, base_url, loss, loss_config, backend_hint, dataset, sandb
     if max_steps is not None:
         kwargs["max_steps"] = max_steps
     config = rl_train.Config(**kwargs)
+    traj_note = f", trajectories={trajectories_dir}" if trajectories_dir else ""
     if dry_run:
         click.echo(
             f"[dry-run] harbor config OK: {len(tasks)} tasks, sandbox={sandbox}, "
-            f"loss_fn={loss} backend={backend or 'unknown'}"
+            f"loss_fn={loss} backend={backend or 'unknown'} tito={'on' if use_tito else 'off'}{traj_note}"
         )
         return
     click.echo(
         f"Harbor RL: {model_name}, {len(tasks)} tasks from {dataset}, "
-        f"sandbox={sandbox}, loss_fn={loss}, via {base_url}"
+        f"sandbox={sandbox}, loss_fn={loss}, tito={'on' if use_tito else 'off'}{traj_note}, via {base_url}"
     )
-    _run(rl_train.main(config))
+    if trajectories_dir:
+        from rlcli import atif
+
+        written: list[dict] = []
+        atif.configure(atif.FileSink(str(Path(trajectories_dir).resolve()), on_written=written.append))
+    try:
+        _run(rl_train.main(config))
+    finally:
+        if trajectories_dir:
+            atif.configure(None)
+            click.echo(f"{len(written)} ATIF trajectories under {Path(trajectories_dir).resolve()}")

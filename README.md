@@ -19,6 +19,9 @@ rlcli train rl --model Qwen/Qwen3-4B-Instruct-2507 --loss gspo
 # agent RL in sandboxed environments: Docker container + instruction + test script = reward
 rlcli train harbor --model Qwen/Qwen3-4B-Instruct-2507 --loss gspo --dataset terminal-bench@2.0
 
+# the same, token-in/token-out, every episode written as an ATIF trajectory with its token ids
+rlcli train harbor --model Qwen/Qwen3-4B-Instruct-2507 --loss gspo --dataset ./tasks --trajectories ./episodes
+
 # on-policy self-distillation: the same weights, given a privileged hint, teach the student
 rlcli train opsd --model Qwen/Qwen3-4B-Instruct-2507 --dataset prompts.jsonl --teacher-hint "Think step by step and check your arithmetic."
 
@@ -51,6 +54,8 @@ Measured, with receipts in [`benchmarks/`](benchmarks/):
 - Backends: `jax` (runs anywhere, CPU ok), `fsdp` / `megatron` (Linux + CUDA; serve the full loss set incl. `gspo`, `cispo`, `dppo`, `ppo_critic`).
 - `rlcli train` invokes pinned [tinker-cookbook](https://github.com/thinking-machines-lab/tinker-cookbook) recipes programmatically. `--loss gspo` on a JAX server fails fast with a clear error.
 - `rlcli train harbor` runs Harbor-format tasks (Dockerfile + instruction + test script) on your local Docker daemon — the test verdict is the reward. No cloud sandbox account needed.
+- `--tito` (implied by `--trajectories`) makes multi-turn rollouts token-in/token-out: each turn extends the previous turn's *sampled* tokens instead of re-rendering the history (`rlcli/tito_bridge.py`, on PrimeIntellect's `renderers`). Without it, chat templates that drop thinking on re-render (Qwen3.5) split every turn into its own datum.
+- `--trajectories DIR` records every episode as an [ATIF](https://github.com/laude-institute/harbor/blob/main/rfcs/0001-trajectory-format.md) trajectory — Harbor's interchange format — with prompt and completion token ids inline; see below.
 - `rlcli train opsd` runs on-policy distillation from a prompts JSONL (`{"prompt": ...}` or `{"messages": [...]}`): the student samples, a teacher (`--teacher`: any base model or `tinker://` checkpoint on the server; default the student's own base) scores those tokens, and the negative reverse KL becomes the per-token advantage. `--teacher-hint TEXT` gives the teacher privileged context the student never sees.
 - `rlcli checkpoint / run / session` pass through to the official tinker CLI, pointed at your server.
 - Everything stays in your environment: traces, data, training, weights.
@@ -95,11 +100,43 @@ untouched container — a test an idle agent passes is not a reward signal. Each
 task.toml records lineage (`[synth]` source file/line + imported reward), and
 the output directory feeds `rlcli train harbor --dataset ./tasks` directly.
 
+## Episodes as ATIF trajectories (`--trajectories`)
+
+`rlcli train harbor --trajectories ./episodes` writes one JSON file per episode
+in Harbor's Agent Trajectory Interchange Format (ATIF v1.7), so Harbor's own
+viewer and `harbor-atif2otel` read them directly. Each file has the system and
+user prompt as steps, one `agent` step per turn with its tool calls, the tool
+results it observed, and the episode's reward under `final_metrics.extra`
+(`reward`, plus a `rewards` map for named components). Agent steps carry the
+token-level record under `metrics`, the slots the spec reserves for it:
+
+```json
+{"step_id": 3, "source": "agent", "message": "", "reasoning_content": "I'll list files.",
+ "tool_calls": [{"tool_call_id": "call_2", "function_name": "bash", "arguments": {"cmd": "ls"}}],
+ "observation": {"results": [{"source_call_id": "call_2", "content": "README.md\nsrc/"}]},
+ "metrics": {"prompt_tokens": 285, "completion_tokens": 55,
+             "prompt_token_ids": [151644, 8948, "…"], "completion_token_ids": [151667, "…"],
+             "extra": {"ckey": "aeebceca830ceb3a"}}}
+```
+
+`ckey` is a digest of the first 16 sampled ids; the same key is stamped on the
+per-sample capture rows (`rlcli.trace_capture`), which is how a step and the
+sequence that produced it are joined without any extra plumbing. Files are
+validated against Harbor's pydantic models in the test suite (`pip install
+harbor` to run those tests; they skip otherwise). Tool results that answer a
+call the model never made keep their content but drop the dangling id, since
+ATIF rejects references to unknown calls.
+
+`rlcli.atif.messages_to_trajectory(messages, reward=…)` turns an imported
+conversation (`rlcli import` output) into the same shape, so logged
+conversations and recorded episodes share one format.
+
 ## Development
 
 ```bash
 uv venv && uv pip install -e ".[dev]"
 pytest                       # includes the wire-compat test for extended losses
+uv pip install harbor        # optional: validates recorded ATIF files against Harbor's models
 uv pip install -e ".[train]" "tinker-cookbook @ git+https://github.com/thinking-machines-lab/tinker-cookbook@f46eddde86e5397138917516a6c69d2ecbf538b1"  # train commands (PyPI forbids the git pin inside the extra)
 ```
 

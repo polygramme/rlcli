@@ -60,3 +60,18 @@ def test_harbor_loss_config_passthrough(harbor_cache):
         "--loss-config", json.dumps({"clip_low_threshold": 0.8}), "--dry-run",
     ])
     assert result.exit_code == 0, result.output or result.exception
+
+
+def test_harbor_trajectories_option_selects_the_bridging_builder(harbor_cache, tmp_path):
+    result = CliRunner().invoke(main_cli, [
+        "train", "harbor", "--model", "Qwen/Qwen3-4B-Instruct-2507",
+        "--dataset", "mytasks", "--backend", "fsdp", "--trajectories", str(tmp_path / "eps"), "--dry-run",
+    ])
+    assert result.exit_code == 0, result.output or result.exception
+    assert "tito=on" in result.output and "trajectories=" in result.output
+    # explicit opt-out keeps the plain cookbook builder even with no recording
+    result = CliRunner().invoke(main_cli, [
+        "train", "harbor", "--model", "Qwen/Qwen3-4B-Instruct-2507",
+        "--dataset", "mytasks", "--backend", "fsdp", "--no-tito", "--dry-run",
+    ])
+    assert result.exit_code == 0 and "tito=off" in result.output
