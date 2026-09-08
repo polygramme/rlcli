@@ -184,11 +184,14 @@ def sl(dataset_path, model_name, base_url, renderer_name, batch_size, learning_r
 @click.option("--save-every", type=int, default=20, show_default=True)
 @click.option("--eval-every", type=int, default=0, show_default=True)
 @click.option("--max-steps", type=int, default=None)
+@click.option("--max-steps-off-policy", type=int, default=0, show_default=True,
+              help="Async RL: keep sampling while the trainer steps; drop groups sampled more than "
+                   "this many steps ago (the cookbook's AsyncConfig). 0 = synchronous batches.")
 @click.option("--log-path", default=None)
 @click.option("--dry-run", is_flag=True, help="Build and print the config, don't train.")
 def rl(model_name, base_url, loss, loss_config, backend_hint, dataset, renderer_name,
        batch_size, group_size, learning_rate, max_tokens, lora_rank, save_every,
-       eval_every, max_steps, log_path, dry_run):
+       eval_every, max_steps, max_steps_off_policy, log_path, dry_run):
     """RL on a built-in environment, with the full SkyRL loss set."""
     # Loss/backend guard runs first: it needs no cookbook and its error is
     # more actionable than a missing-dependency message.
@@ -225,6 +228,9 @@ def rl(model_name, base_url, loss, loss_config, backend_hint, dataset, renderer_
     )
     if max_steps is not None:
         kwargs["max_steps"] = max_steps
+    if max_steps_off_policy:
+        kwargs["async_config"] = rl_train.AsyncConfig(max_steps_off_policy=max_steps_off_policy,
+                                                      groups_per_batch=kwargs["dataset_builder"].batch_size)
     config = rl_train.Config(**kwargs)
     if dry_run:
         click.echo(f"[dry-run] rl config OK: loss_fn={loss} backend={backend or 'unknown'}")
@@ -354,6 +360,9 @@ def opsd(dataset_path, model_name, base_url, teacher, teacher_hint, kl_penalty_c
 @click.option("--save-every", type=int, default=5, show_default=True)
 @click.option("--eval-every", type=int, default=0, show_default=True)
 @click.option("--max-steps", type=int, default=None)
+@click.option("--max-steps-off-policy", type=int, default=0, show_default=True,
+              help="Async RL: keep sampling while the trainer steps; drop groups sampled more than "
+                   "this many steps ago (the cookbook's AsyncConfig). 0 = synchronous batches.")
 @click.option("--sandbox-timeout", type=int, default=3600, show_default=True)
 @click.option("--command-timeout", type=int, default=120, show_default=True)
 @click.option("--log-path", default=None)
@@ -368,7 +377,7 @@ def opsd(dataset_path, model_name, base_url, teacher, teacher_hint, kl_penalty_c
 def harbor(model_name, base_url, loss, loss_config, backend_hint, dataset, sandbox,
            task_filter, task_limit, renderer_name, group_size, groups_per_batch,
            learning_rate, max_tokens, max_turns, lora_rank, save_every, eval_every,
-           max_steps, sandbox_timeout, command_timeout, log_path, trajectories_dir, tito, dry_run):
+           max_steps, max_steps_off_policy, sandbox_timeout, command_timeout, log_path, trajectories_dir, tito, dry_run):
     """RL on Harbor tasks in local Docker sandboxes, reward from tests/test.sh."""
     backend = backend_hint or backend_for_url(base_url)
     ensure_loss_supported(loss, backend)
@@ -452,6 +461,9 @@ def harbor(model_name, base_url, loss, loss_config, backend_hint, dataset, sandb
     )
     if max_steps is not None:
         kwargs["max_steps"] = max_steps
+    if max_steps_off_policy:
+        kwargs["async_config"] = rl_train.AsyncConfig(max_steps_off_policy=max_steps_off_policy,
+                                                      groups_per_batch=kwargs["dataset_builder"].batch_size)
     config = rl_train.Config(**kwargs)
     traj_note = f", trajectories={trajectories_dir}" if trajectories_dir else ""
     if dry_run:
