@@ -61,10 +61,14 @@ class PromptFormatError(ValueError):
 
 @dataclass(frozen=True)
 class PromptRow:
-    """One prompt: the final user turn plus any preceding context turns."""
+    """One prompt: the final user turn plus any preceding context turns, and
+    optionally its own privileged hint (a row-level `hint` in the JSONL —
+    e.g. the recorded answer, a verifier's output, a user's correction). A
+    row hint overrides the run-wide --teacher-hint."""
 
     question: str
     convo_prefix: tuple[dict, ...] = ()
+    hint: str | None = None
 
     def messages(self, hint: str | None = None) -> list[renderers.Message]:
         content = f"{hint}{HINT_SEPARATOR}{self.question}" if hint else self.question
@@ -90,11 +94,14 @@ def load_prompt_rows(path: str) -> list[PromptRow]:
                 raise PromptFormatError(f"line {lineno}: invalid JSON ({e.msg})") from e
             if not isinstance(record, dict):
                 raise PromptFormatError(f"line {lineno}: expected an object, got {type(record).__name__}")
+            hint = record.get("hint")
+            if hint is not None and (not isinstance(hint, str) or not hint.strip()):
+                raise PromptFormatError(f"line {lineno}: 'hint' must be a non-empty string when given")
             if "prompt" in record:
                 prompt = record["prompt"]
                 if not isinstance(prompt, str) or not prompt.strip():
                     raise PromptFormatError(f"line {lineno}: 'prompt' must be a non-empty string")
-                rows.append(PromptRow(question=prompt))
+                rows.append(PromptRow(question=prompt, hint=hint))
                 continue
             if "messages" not in record:
                 raise PromptFormatError(
@@ -112,7 +119,7 @@ def load_prompt_rows(path: str) -> list[PromptRow]:
             if last_user < 0 or not turns[last_user]["content"].strip():
                 raise PromptFormatError(f"line {lineno}: no user message with text content")
             rows.append(
-                PromptRow(question=turns[last_user]["content"], convo_prefix=tuple(turns[:last_user]))
+                PromptRow(question=turns[last_user]["content"], convo_prefix=tuple(turns[:last_user]), hint=hint)
             )
     if not rows:
         raise PromptFormatError(f"{path}: no prompts found")
@@ -197,16 +204,27 @@ class JsonlPromptDataset(RLDataset):
         # student prompt tokens -> hinted prompt tokens, consumed by HintedTeacher.
         self.hinted_prompts: dict[tuple[int, ...], list[int]] = {}
 
+    @property
+    def hinted(self) -> bool:
+        """True when any row has a hint (its own or the run-wide one)."""
+        return bool(self.teacher_hint) or any(r.hint for r in self.rows)
+
+    def hint_for(self, row: PromptRow) -> str | None:
+        return row.hint or self.teacher_hint
+
     def _register_hint(self, row: PromptRow) -> None:
+        hint = self.hint_for(row)
+        if not hint:
+            return
         student = tuple(self.renderer.build_generation_prompt(row.messages()).to_ints())
         if student not in self.hinted_prompts:
-            hinted = self.renderer.build_generation_prompt(row.messages(self.teacher_hint))
+            hinted = self.renderer.build_generation_prompt(row.messages(hint))
             self.hinted_prompts[student] = hinted.to_ints()
 
     def get_batch(self, index: int) -> Sequence[EnvGroupBuilder]:
         rows = self.rows[index * self.batch_size : (index + 1) * self.batch_size]
         assert rows, "Incorrect batch size"
-        if self.teacher_hint:
+        if self.hinted:
             for row in rows:
                 self._register_hint(row)
         return [
@@ -253,15 +271,26 @@ class JsonlPromptDatasetBuilder(RLDatasetBuilder):
         return dataset, None
 
 
+def _rows_have_hints(config: train_on_policy.Config) -> bool:
+    """True when any dataset builder's JSONL carries row-level hints."""
+    for dc in config.dataset_configs:
+        b = dc.dataset_builder
+        path = getattr(b, "file_path", None)
+        if path and any(r.hint for r in load_prompt_rows(path)):
+            return True
+    return False
+
+
 async def main(config: train_on_policy.Config, teacher_hint: str | None = None) -> None:
     """Run on-policy distillation; with a hint, the teacher scores hint + prompt.
 
-    Without a hint this is the cookbook's train_on_policy.main(). With one, the
-    setup below mirrors that function at the pinned cookbook commit (keep in
-    sync when bumping COOKBOOK_REQUIREMENT), except that each teacher
-    SamplingClient is wrapped in HintedTeacher fed by its dataset.
+    Without any hint (run-wide or per row) this is the cookbook's
+    train_on_policy.main(). With one, the setup below mirrors that function at
+    the pinned cookbook commit (keep in sync when bumping COOKBOOK_REQUIREMENT),
+    except that each teacher SamplingClient is wrapped in HintedTeacher fed by
+    its dataset.
     """
-    if not teacher_hint:
+    if not teacher_hint and not _rows_have_hints(config):
         await train_on_policy.main(config)
         return
 
@@ -327,8 +356,8 @@ async def main(config: train_on_policy.Config, teacher_hint: str | None = None) 
             base_model=teacher_config.base_model,
             model_path=teacher_config.load_checkpoint_path,
         )
-        if not isinstance(dataset, JsonlPromptDataset) or dataset.teacher_hint != teacher_hint:
-            raise ValueError("teacher_hint needs every dataset to be a hinted JsonlPromptDataset")
+        if not isinstance(dataset, JsonlPromptDataset) or not dataset.hinted:
+            raise ValueError("hinted OPSD needs every dataset to be a JsonlPromptDataset with a hint (run-wide or per row)")
         teacher_clients.append(HintedTeacher(teacher_client, dataset.hinted_prompts))
         logger.info(
             f"Created hinted teacher sampling client for {teacher_config.base_model} "

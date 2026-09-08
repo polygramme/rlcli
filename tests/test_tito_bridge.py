@@ -498,3 +498,53 @@ def test_sandbox_timing_and_grader_duration_reach_the_terminal_metrics():
     with pytest.raises(RuntimeError):
         asyncio.run(b.sandbox_factory("d", 1))
     assert stats["failed"] == 1
+
+
+def test_exit_code_reward_patch_honours_the_documented_contract():
+    """A test.sh that writes no reward file is graded by its exit status;
+    one that writes /logs/verifier/reward.txt keeps the file's value."""
+    import asyncio
+
+    from rlcli import harbor_tito as ht
+
+    class Res:
+        def __init__(self, exit_code, stdout=""):
+            self.exit_code, self.stdout, self.stderr = exit_code, stdout, ""
+
+    class Sandbox:
+        def __init__(self, test_exit, files):
+            self.test_exit, self.files, self.cmds = test_exit, files, []
+
+        async def run_command(self, cmd, workdir=None, timeout=None):
+            self.cmds.append(cmd)
+            return Res(self.test_exit if "test.sh" in cmd else 0)
+
+        async def read_file(self, path):
+            return Res(0, self.files[path]) if path in self.files else Res(1)
+
+        async def write_file(self, *a, **k):
+            pass
+
+    class Reward:
+        def __init__(self, sandbox):
+            self.sandbox, self.grader_timeout = sandbox, 5
+
+        async def _upload_tests(self):
+            pass
+
+        async def __call__(self, history):
+            raise AssertionError("original grader should be replaced")
+
+    assert ht.patch_exit_code_reward(Reward) and not ht.patch_exit_code_reward(Reward)
+    r, m = asyncio.run(Reward(Sandbox(0, {}))([]))
+    assert r == 1.0 and m["test_passed"] == 1.0 and m["reward_from_exit_code"] == 1.0 and m["test_exit_code"] == 0.0
+    r, m = asyncio.run(Reward(Sandbox(1, {}))([]))
+    assert r == 0.0 and m["test_passed"] == 0.0
+    r, m = asyncio.run(Reward(Sandbox(1, {"/logs/verifier/reward.txt": "0.75\n"}))([]))
+    assert r == 0.75 and "reward_from_exit_code" not in m
+    r, m = asyncio.run(Reward(Sandbox(0, {"/logs/verifier/reward.json": '{"reward": 0.0}'}))([]))
+    assert r == 0.0   # the file wins over a passing exit status
+    # timing patch composes on top
+    assert ht.patch_timed_reward(Reward)
+    r, _ = asyncio.run(Reward(Sandbox(0, {}))([]))
+    assert r == 1.0

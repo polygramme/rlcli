@@ -93,3 +93,43 @@ def test_hinted_teacher_realigns_logprobs():
     assert out == [None, 0.0, 0.0, 40.0, 50.0]
     with pytest.raises(RuntimeError, match="registered student prompt"):
         asyncio.run(teacher.compute_logprobs_async(tinker.ModelInput.from_ints([7, 8, 9])))
+
+
+def test_row_level_hints_override_the_run_wide_hint(tmp_path):
+    from rlcli.opsd import JsonlPromptDataset, PromptRow, load_prompt_rows
+
+    p = tmp_path / "p.jsonl"
+    p.write_text(
+        '{"prompt": "What is 17*23?", "hint": "The answer is 391."}\n'
+        '{"messages": [{"role": "user", "content": "Name a prime."}]}\n'
+        '{"prompt": "x", "hint": "  "}\n'
+    )
+    import pytest
+    from rlcli.opsd import PromptFormatError
+
+    with pytest.raises(PromptFormatError):
+        load_prompt_rows(str(p))
+    p.write_text(p.read_text().rsplit("\n", 2)[0] + "\n")
+    rows = load_prompt_rows(str(p))
+    assert rows[0].hint == "The answer is 391." and rows[1].hint is None
+
+    class R:  # renderer: one token per char of the joined messages
+        def build_generation_prompt(self, messages):
+            class MI:
+                def __init__(self, ids):
+                    self._ids = ids
+
+                def to_ints(self):
+                    return self._ids
+
+            return MI([ord(c) % 97 for m in messages for c in m["content"]])
+
+    ds = JsonlPromptDataset(rows, batch_size=2, group_size=1, renderer=R(), teacher_hint=None)
+    assert ds.hinted and ds.hint_for(rows[0]) == "The answer is 391." and ds.hint_for(rows[1]) is None
+    ds.get_batch(0)
+    assert len(ds.hinted_prompts) == 1  # only the hinted row registers a teacher prompt
+    ds2 = JsonlPromptDataset(rows, batch_size=2, group_size=1, renderer=R(), teacher_hint="Think step by step.")
+    assert ds2.hint_for(rows[0]) == "The answer is 391." and ds2.hint_for(rows[1]) == "Think step by step."
+    ds2.get_batch(0)
+    assert len(ds2.hinted_prompts) == 2
+    assert not JsonlPromptDataset([PromptRow("q")], 1, 1, R()).hinted

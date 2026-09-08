@@ -14,6 +14,7 @@ every time upstream adds a field.
 from __future__ import annotations
 
 import contextvars
+import json
 import time
 
 import logging
@@ -57,11 +58,63 @@ def patch_timed_reward(cls) -> bool:
     return True
 
 
+async def read_reward_file(sandbox) -> float | None:
+    """/logs/verifier/reward.txt (a float) or reward.json ({"reward": x}), or
+    None when the test wrote neither."""
+    r = await sandbox.read_file("/logs/verifier/reward.txt")
+    if r.exit_code == 0 and r.stdout.strip():
+        try:
+            return float(r.stdout.strip())
+        except ValueError:
+            return None
+    r = await sandbox.read_file("/logs/verifier/reward.json")
+    if r.exit_code == 0 and r.stdout.strip():
+        try:
+            return float((json.loads(r.stdout) or {}).get("reward", 0.0))
+        except (ValueError, TypeError, AttributeError):
+            return None
+    return None
+
+
+def patch_exit_code_reward(cls) -> bool:
+    """Make HarborReward honour the documented contract: the test's exit status
+    is the reward when it writes no reward file.
+
+    The cookbook's grader only reads /logs/verifier/reward.{txt,json} and
+    treats a missing file as 0.0, so every task whose test.sh simply exits
+    0/1 — the shape `rlcli synth` scaffolds and the README documents — was
+    rewarded 0 no matter what the agent did. Idempotent."""
+    if getattr(cls, "_pg_exit_code_reward", False):
+        return False
+
+    async def call(self, history):
+        try:
+            await self._upload_tests()
+            await self.sandbox.run_command("mkdir -p /logs/verifier", workdir="/root")
+            result = await self.sandbox.run_command("bash /tests/test.sh", workdir="/root", timeout=self.grader_timeout)
+            reward = await read_reward_file(self.sandbox)
+            source = "file"
+            if reward is None:
+                reward, source = (1.0 if result.exit_code == 0 else 0.0), "exit_code"
+            metrics = {"reward": reward, "test_passed": float(reward > 0), "test_exit_code": float(result.exit_code)}
+            if source == "exit_code":
+                metrics["reward_from_exit_code"] = 1.0
+            return reward, metrics
+        except Exception as e:  # noqa: BLE001 - grading failure is a 0, never a crash
+            logger.error("Harbor grading failed: %s", e)
+            return 0.0, {"reward": 0.0, "test_passed": 0.0, "grading_error": 1.0}
+
+    cls.__call__ = call
+    cls._pg_exit_code_reward = True
+    return True
+
+
 def _patch_harbor_reward() -> None:
     try:
         from tinker_cookbook.recipes.harbor_rl.harbor_tools import HarborReward
 
-        patch_timed_reward(HarborReward)
+        patch_exit_code_reward(HarborReward)   # first: the grading rule
+        patch_timed_reward(HarborReward)       # then: timing around it
     except Exception:  # noqa: BLE001 - optional; metrics just stay absent
         pass
 
